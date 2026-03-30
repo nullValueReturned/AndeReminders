@@ -4,6 +4,7 @@
 ## Author:
 ## Version: 1.0
 ## SavedVariables: andeRemindersDB
+## OptionalDeps: LibSharedMedia-3.0
 
 andeReminders.lua
 Modules\Enchants.lua

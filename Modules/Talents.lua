@@ -5,12 +5,30 @@ local checkTimer   = nil
 local alertFrame   = nil   -- box for unspent talent points
 local buildTextFrame = nil -- loose flash text for active build
 
-local FONTS = {
-    { name = "Default",  path = "Fonts\\FRIZQT__.TTF" },
-    { name = "Serif",    path = "Fonts\\MORPHEUS.ttf"  },
-    { name = "Blocky",   path = "Fonts\\skurri.ttf"    },
-    { name = "Narrow",   path = "Fonts\\ARIALN.TTF"    },
+-- LibSharedMedia-3.0 integration (optional — falls back to built-in fonts if not present)
+local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
+
+local FALLBACK_FONT_NAMES = { "Friz Quadrata TT", "Morpheus", "Skurri", "Arial Narrow" }
+local FALLBACK_FONT_PATHS = {
+    ["Friz Quadrata TT"] = "Fonts\\FRIZQT__.TTF",
+    ["Morpheus"]         = "Fonts\\MORPHEUS.ttf",
+    ["Skurri"]           = "Fonts\\skurri.ttf",
+    ["Arial Narrow"]     = "Fonts\\ARIALN.TTF",
 }
+local DEFAULT_FONT_NAME = "Friz Quadrata TT"
+
+local function GetFontNames()
+    if LSM then return LSM:List("font") end
+    return FALLBACK_FONT_NAMES
+end
+
+local function ResolveFontPath(name)
+    if LSM then
+        local path = LSM:Fetch("font", name)
+        if path then return path end
+    end
+    return FALLBACK_FONT_PATHS[name] or "Fonts\\FRIZQT__.TTF"
+end
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -25,7 +43,7 @@ function TalentModule:InitDB(db)
     if db.talents.checks.unspentPoints   == nil then db.talents.checks.unspentPoints   = true end
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
     if not db.talents.buildText then db.talents.buildText = {} end
-    if not db.talents.buildText.font then db.talents.buildText.font = FONTS[1].path end
+    if not db.talents.buildText.fontName then db.talents.buildText.fontName = DEFAULT_FONT_NAME end
     if db.talents.buildText.r == nil then db.talents.buildText.r = 1   end
     if db.talents.buildText.g == nil then db.talents.buildText.g = 0.8 end
     if db.talents.buildText.b == nil then db.talents.buildText.b = 0   end
@@ -108,11 +126,11 @@ end
 function TalentModule:ShowBuildText(name)
     local btf = GetBuildTextFrame()
     local cfg = AR.db and AR.db.talents and AR.db.talents.buildText
-    local font = (cfg and cfg.font) or FONTS[1].path
-    local r    = (cfg and cfg.r)    or 1
-    local g    = (cfg and cfg.g)    or 0.8
-    local b    = (cfg and cfg.b)    or 0
-    btf.text:SetFont(font, 36, "OUTLINE")
+    local fontName = (cfg and cfg.fontName) or DEFAULT_FONT_NAME
+    local r        = (cfg and cfg.r)        or 1
+    local g        = (cfg and cfg.g)        or 0.8
+    local b        = (cfg and cfg.b)        or 0
+    btf.text:SetFont(ResolveFontPath(fontName), 36, "OUTLINE")
     btf.text:SetTextColor(r, g, b)
     btf.text:SetText(name)
     btf:Show()
@@ -359,10 +377,11 @@ function TalentModule:BuildUI(parent, db)
     fontLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
     fontLabel:SetText("Font:")
 
-    -- Find the saved font's index
+    -- Build font list (from LSM if available, else fallback)
+    local fontNames = GetFontNames()
     local fontIndex = 1
-    for i, f in ipairs(FONTS) do
-        if f.path == db.talents.buildText.font then fontIndex = i; break end
+    for i, name in ipairs(fontNames) do
+        if name == db.talents.buildText.fontName then fontIndex = i; break end
     end
 
     local prevBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
@@ -372,9 +391,9 @@ function TalentModule:BuildUI(parent, db)
 
     local fontNameLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     fontNameLabel:SetPoint("LEFT", prevBtn, "RIGHT", 6, 0)
-    fontNameLabel:SetWidth(70)
+    fontNameLabel:SetWidth(130)
     fontNameLabel:SetJustifyH("CENTER")
-    fontNameLabel:SetText(FONTS[fontIndex].name)
+    fontNameLabel:SetText(fontNames[fontIndex])
 
     local nextBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     nextBtn:SetSize(24, 22)
@@ -382,14 +401,14 @@ function TalentModule:BuildUI(parent, db)
     nextBtn:SetPoint("LEFT", fontNameLabel, "RIGHT", 6, 0)
 
     prevBtn:SetScript("OnClick", function()
-        fontIndex = ((fontIndex - 2) % #FONTS) + 1
-        db.talents.buildText.font = FONTS[fontIndex].path
-        fontNameLabel:SetText(FONTS[fontIndex].name)
+        fontIndex = ((fontIndex - 2) % #fontNames) + 1
+        db.talents.buildText.fontName = fontNames[fontIndex]
+        fontNameLabel:SetText(fontNames[fontIndex])
     end)
     nextBtn:SetScript("OnClick", function()
-        fontIndex = (fontIndex % #FONTS) + 1
-        db.talents.buildText.font = FONTS[fontIndex].path
-        fontNameLabel:SetText(FONTS[fontIndex].name)
+        fontIndex = (fontIndex % #fontNames) + 1
+        db.talents.buildText.fontName = fontNames[fontIndex]
+        fontNameLabel:SetText(fontNames[fontIndex])
     end)
 
     -- ---- Color picker ----
