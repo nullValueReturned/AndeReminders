@@ -160,7 +160,10 @@ end
 function EnchantModule:RunCheck()
     if not AR.db then return end
     local missing = self:CheckAll(AR.db)
-    if #missing == 0 then return end
+    if #missing == 0 then
+        if alertFrame and alertFrame:IsShown() then alertFrame:Hide() end
+        return
+    end
 
     local notify = AR.db.enchants.notify
     local slots  = table.concat(missing, ", ")

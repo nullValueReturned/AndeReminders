@@ -285,7 +285,10 @@ function GearModule:RunCheck()
         end
     end
 
-    if #issues == 0 then return end
+    if #issues == 0 then
+        if alertFrame and alertFrame:IsShown() then alertFrame:Hide() end
+        return
+    end
 
     local notify = db.gear.notify
     if notify.chat then
