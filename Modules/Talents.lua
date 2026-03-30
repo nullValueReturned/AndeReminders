@@ -384,36 +384,127 @@ function TalentModule:BuildUI(parent, db)
         if name == db.talents.buildText.fontName then fontIndex = i; break end
     end
 
-    local prevBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    prevBtn:SetSize(24, 22)
-    prevBtn:SetText("<")
-    prevBtn:SetPoint("LEFT", fontLabel, "RIGHT", 10, 0)
+    local ITEM_HEIGHT  = 20
+    local POPUP_WIDTH  = 200
+    local MAX_LIST_H   = 300
+    local SCROLLBAR_W  = 14
 
-    local fontNameLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    fontNameLabel:SetPoint("LEFT", prevBtn, "RIGHT", 6, 0)
-    fontNameLabel:SetWidth(130)
-    fontNameLabel:SetJustifyH("CENTER")
-    fontNameLabel:SetText(fontNames[fontIndex])
+    local totalH      = #fontNames * ITEM_HEIGHT
+    local visibleH    = math.min(totalH, MAX_LIST_H)
+    local maxScroll   = math.max(0, totalH - visibleH)
+    local hasScrollbar = maxScroll > 0
 
-    local nextBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    nextBtn:SetSize(24, 22)
-    nextBtn:SetText(">")
-    nextBtn:SetPoint("LEFT", fontNameLabel, "RIGHT", 6, 0)
+    -- Dropdown trigger button
+    local dropBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    dropBtn:SetSize(POPUP_WIDTH, 22)
+    dropBtn:SetPoint("LEFT", fontLabel, "RIGHT", 10, 0)
+    dropBtn:SetText(fontNames[fontIndex])
 
-    prevBtn:SetScript("OnClick", function()
-        fontIndex = ((fontIndex - 2) % #fontNames) + 1
-        db.talents.buildText.fontName = fontNames[fontIndex]
-        fontNameLabel:SetText(fontNames[fontIndex])
+    -- Popup (child of parent so it rides with the settings window;
+    -- elevated frame level so it renders above all sibling content)
+    local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    popup:SetSize(POPUP_WIDTH, visibleH + 4)
+    popup:SetFrameLevel(parent:GetFrameLevel() + 20)
+    popup:SetBackdrop({
+        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
+        edgeFile = "Interface/Buttons/WHITE8x8",
+        edgeSize = 1,
+        tile = true, tileSize = 32,
+        insets = { left = 2, right = 2, top = 2, bottom = 2 },
+    })
+    popup:SetBackdropColor(0.08, 0.08, 0.08, 0.97)
+    popup:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+    popup:SetPoint("TOPLEFT", dropBtn, "BOTTOMLEFT", 0, -2)
+    popup:Hide()
+
+    -- Scroll frame (leave room on the right for scrollbar when needed)
+    local scrollRightOffset = hasScrollbar and -(SCROLLBAR_W + 4) or -2
+    local scrollFrame = CreateFrame("ScrollFrame", nil, popup)
+    scrollFrame:SetPoint("TOPLEFT",     popup, "TOPLEFT",     2, -2)
+    scrollFrame:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", scrollRightOffset, 2)
+
+    local content = CreateFrame("Frame", nil, scrollFrame)
+    content:SetWidth(POPUP_WIDTH - (hasScrollbar and (SCROLLBAR_W + 6) or 4))
+    content:SetHeight(math.max(totalH, 1))
+    scrollFrame:SetScrollChild(content)
+
+    -- Item buttons
+    local itemBtns = {}
+    for i, name in ipairs(fontNames) do
+        local btn = CreateFrame("Button", nil, content)
+        btn:SetHeight(ITEM_HEIGHT)
+        btn:SetPoint("TOPLEFT",  content, "TOPLEFT",  0, -(i - 1) * ITEM_HEIGHT)
+        btn:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -(i - 1) * ITEM_HEIGHT)
+
+        local hlTex = btn:CreateTexture(nil, "HIGHLIGHT")
+        hlTex:SetAllPoints()
+        hlTex:SetColorTexture(1, 1, 1, 0.10)
+
+        local selTex = btn:CreateTexture(nil, "BACKGROUND")
+        selTex:SetAllPoints()
+        selTex:SetColorTexture(0.2, 0.4, 0.8, 0.25)
+        selTex:SetShown(i == fontIndex)
+        btn.selTex = selTex
+
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lbl:SetPoint("LEFT",  btn, "LEFT",  6,  0)
+        lbl:SetPoint("RIGHT", btn, "RIGHT", -2, 0)
+        lbl:SetJustifyH("LEFT")
+        lbl:SetText(name)
+
+        btn:SetScript("OnClick", function()
+            if itemBtns[fontIndex] then itemBtns[fontIndex].selTex:Hide() end
+            fontIndex = i
+            db.talents.buildText.fontName = name
+            dropBtn:SetText(name)
+            btn.selTex:Show()
+            popup:Hide()
+        end)
+
+        itemBtns[i] = btn
+    end
+
+    -- Scrollbar
+    local scrollBar
+    if hasScrollbar then
+        scrollBar = CreateFrame("Slider", nil, popup, "UIPanelScrollBarTemplate")
+        scrollBar:SetWidth(SCROLLBAR_W)
+        scrollBar:SetPoint("TOPRIGHT",    popup, "TOPRIGHT",    -2, -18)
+        scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -2,  18)
+        scrollBar:SetMinMaxValues(0, maxScroll)
+        scrollBar:SetValue(0)
+        scrollBar:SetValueStep(ITEM_HEIGHT)
+        scrollBar:SetObeyStepOnDrag(true)
+        scrollBar:SetScript("OnValueChanged", function(self, value)
+            scrollFrame:SetVerticalScroll(value)
+        end)
+
+        scrollFrame:EnableMouseWheel(true)
+        scrollFrame:SetScript("OnMouseWheel", function(_, delta)
+            local cur = scrollBar:GetValue()
+            local min, max = scrollBar:GetMinMaxValues()
+            scrollBar:SetValue(math.max(min, math.min(max, cur - delta * ITEM_HEIGHT * 3)))
+        end)
+    end
+
+    -- Toggle popup; on open, scroll to show the selected item
+    dropBtn:SetScript("OnClick", function()
+        if popup:IsShown() then
+            popup:Hide()
+        else
+            popup:Show()
+            if scrollBar and maxScroll > 0 then
+                scrollBar:SetValue(math.min((fontIndex - 1) * ITEM_HEIGHT, maxScroll))
+            end
+        end
     end)
-    nextBtn:SetScript("OnClick", function()
-        fontIndex = (fontIndex % #fontNames) + 1
-        db.talents.buildText.fontName = fontNames[fontIndex]
-        fontNameLabel:SetText(fontNames[fontIndex])
-    end)
+
+    -- Close popup when the settings tab is hidden
+    parent:HookScript("OnHide", function() popup:Hide() end)
 
     -- ---- Color picker ----
     local colorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    colorLabel:SetPoint("LEFT", nextBtn, "RIGHT", 20, 0)
+    colorLabel:SetPoint("LEFT", dropBtn, "RIGHT", 20, 0)
     colorLabel:SetText("Color:")
 
     local swatch = CreateFrame("Button", nil, parent)
