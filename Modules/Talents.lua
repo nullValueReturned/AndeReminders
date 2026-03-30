@@ -234,8 +234,8 @@ function TalentModule:RunCheck()
         end
     end
 
-    -- Show active build as flash text
-    if db.talents.checks.showActiveBuild then
+    -- Show active build as flash text (ready check only)
+    if db.talents.checks.showActiveBuild and isReadyCheck then
         local name = GetActiveLoadoutName()
         if name then
             self:ShowBuildText(name)
@@ -261,7 +261,11 @@ talentEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 talentEvents:RegisterEvent("READY_CHECK")
 talentEvents:RegisterEvent("PLAYER_TALENT_UPDATE")
 talentEvents:SetScript("OnEvent", function(_, event)
-    ScheduleCheck()
+    if event == "READY_CHECK" then
+        TalentModule:RunCheck(true)
+    else
+        ScheduleCheck()
+    end
 end)
 
 -- ---------------------------------------------------------------------------
