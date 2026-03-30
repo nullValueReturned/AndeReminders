@@ -59,17 +59,16 @@ local function GetAlertFrame()
     alertFrame:SetScript("OnDragStop", alertFrame.StopMovingOrSizing)
     alertFrame:SetFrameStrata("MEDIUM")
     alertFrame:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 24,
-        insets = { left = 8, right = 8, top = 8, bottom = 8 },
+        bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
+        tile = true, tileSize = 32,
+        insets = { left = 4, right = 4, top = 4, bottom = 4 },
     })
     alertFrame:Hide()
 
     -- Header
     local header = alertFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     header:SetPoint("TOPLEFT", alertFrame, "TOPLEFT", 10, -10)
-    header:SetText("|cFFFF6600andeReminders|r")
+    header:SetText("|cFFFF6600AR|r")
     alertFrame.header = header
 
     -- Body text (slot list)
@@ -85,10 +84,6 @@ local function GetAlertFrame()
     closeBtn:SetSize(20, 20)
     closeBtn:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", 2, 2)
     closeBtn:SetScript("OnClick", function()
-        if alertFrame.hideTimer then
-            alertFrame.hideTimer:Cancel()
-            alertFrame.hideTimer = nil
-        end
         alertFrame:Hide()
     end)
 
@@ -102,15 +97,7 @@ function EnchantModule:ShowAlert(text)
     -- Resize frame to fit the text
     af:SetHeight(af.body:GetHeight() + 44)
 
-    -- Cancel any existing auto-hide
-    if af.hideTimer then
-        af.hideTimer:Cancel()
-    end
     af:Show()
-    af.hideTimer = C_Timer.NewTimer(10, function()
-        af:Hide()
-        af.hideTimer = nil
-    end)
 end
 
 -- ---------------------------------------------------------------------------
