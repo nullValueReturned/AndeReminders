@@ -158,6 +158,7 @@ end
 
 -- Run the check and dispatch notifications.
 function EnchantModule:RunCheck()
+    if UnitLevel("player") < 90 then return end
     if not AR.db then return end
     local missing = self:CheckAll(AR.db)
     if #missing == 0 then

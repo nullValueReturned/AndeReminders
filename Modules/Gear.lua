@@ -257,6 +257,7 @@ end
 
 -- Run all enabled checks and dispatch notifications.
 function GearModule:RunCheck()
+    if UnitLevel("player") < 90 then return end
     if not AR.db or not AR.db.gear then return end
     local db = AR.db
 
