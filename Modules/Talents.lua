@@ -112,6 +112,11 @@ end
 -- falls back to the native WoW saved-config name (no icon in that case).
 -- icon may be a numeric texture ID or an atlas name string.
 local function GetActiveLoadoutInfo()
+    -- Ensure TalentLoadoutEx is loaded if it's a demand-loaded addon.
+    if not TLX and C_AddOns and C_AddOns.LoadAddOn then
+        C_AddOns.LoadAddOn("TalentLoadoutEx")
+    end
+
     -- TalentLoadoutEx: TLX.GetLoadedData() returns the first data object whose
     -- talent string matches the current active configuration.
     if TLX and TLX.GetLoadedData then
