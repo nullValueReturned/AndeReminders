@@ -44,9 +44,11 @@ function TalentModule:InitDB(db)
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
     if not db.talents.buildText then db.talents.buildText = {} end
     if not db.talents.buildText.fontName then db.talents.buildText.fontName = DEFAULT_FONT_NAME end
-    if db.talents.buildText.r == nil then db.talents.buildText.r = 1   end
-    if db.talents.buildText.g == nil then db.talents.buildText.g = 0.8 end
-    if db.talents.buildText.b == nil then db.talents.buildText.b = 0   end
+    if db.talents.buildText.r       == nil then db.talents.buildText.r       = 1   end
+    if db.talents.buildText.g       == nil then db.talents.buildText.g       = 0.8 end
+    if db.talents.buildText.b       == nil then db.talents.buildText.b       = 0   end
+    if db.talents.buildText.xOffset == nil then db.talents.buildText.xOffset = 0   end
+    if db.talents.buildText.yOffset == nil then db.talents.buildText.yOffset = 0   end
 end
 
 -- ---------------------------------------------------------------------------
@@ -130,6 +132,10 @@ function TalentModule:ShowBuildText(name, icon)
     local r        = (cfg and cfg.r)        or 1
     local g        = (cfg and cfg.g)        or 0.8
     local b        = (cfg and cfg.b)        or 0
+    local xOff     = (cfg and cfg.xOffset)  or 0
+    local yOff     = (cfg and cfg.yOffset)  or 0
+    btf.text:ClearAllPoints()
+    btf.text:SetPoint("CENTER", UIParent, "CENTER", xOff, yOff)
     btf.text:SetFont(ResolveFontPath(fontName), 36, "OUTLINE")
     btf.text:SetTextColor(r, g, b)
 
@@ -531,6 +537,98 @@ function TalentModule:BuildUI(parent, db)
                 swatchTex:SetColorTexture(prev.r, prev.g, prev.b)
             end,
         })
+    end)
+
+    -- ---- Offset inputs ----
+    y = y - ROW_HEIGHT
+
+    local xOffLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    xOffLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
+    xOffLabel:SetText("X Offset:")
+
+    local xOffBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    xOffBox:SetSize(55, 20)
+    xOffBox:SetPoint("LEFT", xOffLabel, "RIGHT", 6, 0)
+    xOffBox:SetAutoFocus(false)
+    xOffBox:SetText(tostring(db.talents.buildText.xOffset))
+
+    local yOffLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    yOffLabel:SetPoint("LEFT", xOffBox, "RIGHT", 14, 0)
+    yOffLabel:SetText("Y Offset:")
+
+    local yOffBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    yOffBox:SetSize(55, 20)
+    yOffBox:SetPoint("LEFT", yOffLabel, "RIGHT", 6, 0)
+    yOffBox:SetAutoFocus(false)
+    yOffBox:SetText(tostring(db.talents.buildText.yOffset))
+
+    -- Refreshes the text position live while preview is visible
+    local function refreshPreviewPosition()
+        if buildTextFrame and buildTextFrame:IsShown() then
+            buildTextFrame.text:ClearAllPoints()
+            buildTextFrame.text:SetPoint("CENTER", UIParent, "CENTER",
+                db.talents.buildText.xOffset or 0,
+                db.talents.buildText.yOffset or 0)
+        end
+    end
+
+    local function commitXOff()
+        local val = tonumber(xOffBox:GetText())
+        if val then
+            db.talents.buildText.xOffset = val
+            refreshPreviewPosition()
+        else
+            xOffBox:SetText(tostring(db.talents.buildText.xOffset))
+        end
+        xOffBox:ClearFocus()
+    end
+    xOffBox:SetScript("OnEnterPressed", commitXOff)
+    xOffBox:SetScript("OnEscapePressed", function()
+        xOffBox:SetText(tostring(db.talents.buildText.xOffset))
+        xOffBox:ClearFocus()
+    end)
+
+    local function commitYOff()
+        local val = tonumber(yOffBox:GetText())
+        if val then
+            db.talents.buildText.yOffset = val
+            refreshPreviewPosition()
+        else
+            yOffBox:SetText(tostring(db.talents.buildText.yOffset))
+        end
+        yOffBox:ClearFocus()
+    end
+    yOffBox:SetScript("OnEnterPressed", commitYOff)
+    yOffBox:SetScript("OnEscapePressed", function()
+        yOffBox:SetText(tostring(db.talents.buildText.yOffset))
+        yOffBox:ClearFocus()
+    end)
+
+    -- ---- Preview toggle button ----
+    local previewBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    previewBtn:SetSize(100, 22)
+    previewBtn:SetPoint("LEFT", yOffBox, "RIGHT", 20, 0)
+    previewBtn:SetText("Preview")
+
+    previewBtn:SetScript("OnClick", function()
+        local btf = GetBuildTextFrame()
+        if btf:IsShown() then
+            if btf.hideTimer then btf.hideTimer:Cancel(); btf.hideTimer = nil end
+            btf:Hide()
+            previewBtn:SetText("Preview")
+        else
+            local name, icon = GetActiveLoadoutInfo()
+            TalentModule:ShowBuildText(name or "Your Talent Build", icon)
+            -- Cancel the auto-hide so it stays until dismissed
+            local btf2 = GetBuildTextFrame()
+            if btf2.hideTimer then btf2.hideTimer:Cancel(); btf2.hideTimer = nil end
+            previewBtn:SetText("Hide Preview")
+        end
+    end)
+
+    -- Reset the button label if the settings tab is hidden while preview is up
+    parent:HookScript("OnHide", function()
+        previewBtn:SetText("Preview")
     end)
 end
 
