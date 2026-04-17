@@ -107,10 +107,11 @@ function GearModule:InitDB(db)
     if not db.gear.checks then
         db.gear.checks = {}
     end
-    if db.gear.checks.weaponType == nil then db.gear.checks.weaponType = true end
-    if db.gear.checks.weaponStat == nil then db.gear.checks.weaponStat = true end
-    if db.gear.checks.lowIlvl    == nil then db.gear.checks.lowIlvl    = true end
-    if db.gear.lowIlvlThreshold  == nil then db.gear.lowIlvlThreshold  = 50   end
+    if db.gear.checks.weaponType    == nil then db.gear.checks.weaponType    = true end
+    if db.gear.checks.weaponStat    == nil then db.gear.checks.weaponStat    = true end
+    if db.gear.checks.lowIlvl       == nil then db.gear.checks.lowIlvl       = true end
+    if db.gear.checks.lowDurability == nil then db.gear.checks.lowDurability = true end
+    if db.gear.lowIlvlThreshold     == nil then db.gear.lowIlvlThreshold     = 50   end
 end
 
 -- ---------------------------------------------------------------------------
@@ -255,6 +256,42 @@ function GearModule:CheckLowItemLevel(threshold)
     return issues
 end
 
+-- Returns broken and low-durability slot name lists (durability <= 20% of max).
+function GearModule:CheckLowDurability()
+    local broken = {}
+    local low = {}
+    for slot, slotName in pairs(SLOT_NAMES) do
+        local current, max = GetInventoryItemDurability(slot)
+        if current and max and max > 0 then
+            if current == 0 then
+                table.insert(broken, slotName)
+            elseif current / max <= 0.2 then
+                table.insert(low, slotName)
+            end
+        end
+    end
+    return broken, low
+end
+
+-- Shows a UIErrorsFrame message above the character; skipped while in combat.
+function GearModule:RunDurabilityCheck()
+    if not AR.db or not AR.db.gear then return end
+    if not AR.db.gear.checks.lowDurability then return end
+    if InCombatLockdown() then return end
+
+    local broken, low = self:CheckLowDurability()
+    if #broken == 0 and #low == 0 then return end
+
+    local parts = {}
+    if #broken > 0 then
+        table.insert(parts, "|cFFFF0000Broken: " .. table.concat(broken, ", ") .. "|r")
+    end
+    if #low > 0 then
+        table.insert(parts, "|cFFFF6600Low durability: " .. table.concat(low, ", ") .. "|r")
+    end
+    UIErrorsFrame:AddMessage("[AR] " .. table.concat(parts, "  "), 1, 0.4, 0, 1)
+end
+
 -- Run all enabled checks and dispatch notifications.
 function GearModule:RunCheck()
     if UnitLevel("player") < 90 then return end
@@ -321,6 +358,13 @@ gearEvents:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 gearEvents:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 gearEvents:SetScript("OnEvent", function(_, event)
     ScheduleCheck()
+end)
+
+local durabilityEvents = CreateFrame("Frame")
+durabilityEvents:RegisterEvent("PLAYER_DEAD")
+durabilityEvents:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
+durabilityEvents:SetScript("OnEvent", function()
+    GearModule:RunDurabilityCheck()
 end)
 
 -- ---------------------------------------------------------------------------
@@ -436,6 +480,25 @@ function GearModule:BuildUI(parent, db)
     note:SetWidth(450)
     note:SetWordWrap(true)
     note:SetJustifyH("LEFT")
+
+    -- Divider before durability section
+    local div2 = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    div2:SetHeight(1)
+    div2:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
+    div2:SetBackdropColor(0.28, 0.28, 0.28, 1)
+    div2:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, ROWS_TOP - ROW_H * 3 - 54)
+    div2:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, ROWS_TOP - ROW_H * 3 - 54)
+
+    -- Row 4: Low durability warning
+    local cbDur = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    cbDur:SetSize(22, 22)
+    cbDur:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 3 - 68)
+    cbDur:SetChecked(db.gear.checks.lowDurability)
+    cbDur:SetScript("OnClick", function(self) db.gear.checks.lowDurability = self:GetChecked() end)
+
+    local lDur = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lDur:SetPoint("LEFT", cbDur, "RIGHT", 6, 0)
+    lDur:SetText("Low durability warning (≤20%, shown above character, outside combat)")
 end
 
 AR:RegisterModule("Gear", GearModule)
