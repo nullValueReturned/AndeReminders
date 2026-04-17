@@ -498,7 +498,7 @@ function GearModule:BuildUI(parent, db)
 
     local lDur = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     lDur:SetPoint("LEFT", cbDur, "RIGHT", 6, 0)
-    lDur:SetText("Low durability warning (≤20%, shown above character, outside combat)")
+    lDur:SetText("Low durability warning (<50%, shown above character, outside combat)")
 end
 
 AR:RegisterModule("Gear", GearModule)
