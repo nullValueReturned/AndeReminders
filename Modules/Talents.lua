@@ -42,7 +42,7 @@ function TalentModule:InitDB(db)
     if db.talents.buildText.g       == nil then db.talents.buildText.g       = 0.8 end
     if db.talents.buildText.b       == nil then db.talents.buildText.b       = 0   end
     if db.talents.buildText.xOffset == nil then db.talents.buildText.xOffset = 0   end
-    if db.talents.buildText.yOffset == nil then db.talents.buildText.yOffset = 0   end
+    if db.talents.buildText.yOffset == nil then db.talents.buildText.yOffset = 150 end
 end
 
 -- ---------------------------------------------------------------------------

@@ -33,7 +33,7 @@ function EnchantModule:InitDB(db)
     if db.enchants.notify.screen == nil then db.enchants.notify.screen = true  end
     -- Global ilvl override
     if not db.enchants.globalIlvl then
-        db.enchants.globalIlvl = { enabled = false, value = 250 }
+        db.enchants.globalIlvl = { enabled = true, value = 250 }
     end
     -- Per-slot defaults
     if not db.enchants.slots then
