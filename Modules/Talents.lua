@@ -112,8 +112,13 @@ end
 -- falls back to the native WoW saved-config name (no icon in that case).
 -- icon may be a numeric texture ID or an atlas name string.
 local function GetActiveLoadoutInfo()
-    -- Ensure TalentLoadoutEx is loaded if it's a demand-loaded addon.
-    if not TLX and C_AddOns and C_AddOns.LoadAddOn then
+    if C_AddOns and C_AddOns.LoadAddOn then
+        -- Blizzard_PlayerSpells must be loaded BEFORE TalentLoadoutEx so that
+        -- TLX's RegisterAddonLoad("Blizzard_PlayerSpells", ..., "InitFrame") finds
+        -- it already present and calls InitFrame immediately instead of waiting for
+        -- an ADDON_LOADED event that won't re-fire.
+        C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
+        C_AddOns.LoadAddOn("Blizzard_TalentUI")
         C_AddOns.LoadAddOn("TalentLoadoutEx")
     end
 
@@ -124,12 +129,6 @@ local function GetActiveLoadoutInfo()
         if data and data.name then
             return data.name, data.icon
         end
-    end
-
-    -- Ensure the native talent UI addon is loaded before using its APIs.
-    if C_AddOns and C_AddOns.LoadAddOn then
-        C_AddOns.LoadAddOn("Blizzard_TalentUI")
-        C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
     end
 
     -- Native WoW loadout name (no icon available)
