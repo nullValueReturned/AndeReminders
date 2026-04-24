@@ -1,19 +1,30 @@
 AndeReminders = {}
 local AR = AndeReminders
 
-AR.registeredModules = {} -- ordered list of { name, module, tabButton, contentFrame }
+AR.registeredModules = {}
+AR.anchorFrames      = {}
+AR.anchorsShown      = false
 
--- Register a reminder module. Called by module files at load time.
+local ANCHOR_DEFS = {
+    { name = "talents",  label = "Talent Build",   x = 0, y = 180, w = 300, h = 60 },
+    { name = "enchants", label = "Enchant Alerts", x = 0, y = 90,  w = 360, h = 80 },
+    { name = "gear",     label = "Gear Alerts",    x = 0, y = 0,   w = 380, h = 80 },
+    { name = "repair",   label = "Repair Warning", x = 0, y = -90, w = 500, h = 70 },
+}
+
 function AR:RegisterModule(name, module)
     table.insert(self.registeredModules, { name = name, module = module })
 end
 
--- Initialize saved variables, then let each module set its own defaults.
 function AR:InitDB()
-    if not AndeRemindersDB then
-        AndeRemindersDB = {}
-    end
+    if not AndeRemindersDB then AndeRemindersDB = {} end
     AR.db = AndeRemindersDB
+    if not AR.db.anchors then AR.db.anchors = {} end
+    for _, def in ipairs(ANCHOR_DEFS) do
+        if not AR.db.anchors[def.name] then
+            AR.db.anchors[def.name] = { x = def.x, y = def.y }
+        end
+    end
     for _, entry in ipairs(AR.registeredModules) do
         if entry.module.InitDB then
             entry.module:InitDB(AR.db)
@@ -21,7 +32,78 @@ function AR:InitDB()
     end
 end
 
--- Settings window state
+-- ---------------------------------------------------------------------------
+-- Anchor system
+-- ---------------------------------------------------------------------------
+
+function AR:GetAnchor(name)
+    return AR.anchorFrames[name]
+end
+
+local toggleAnchorsBtn
+
+function AR:ToggleAnchors()
+    AR.anchorsShown = not AR.anchorsShown
+    for _, f in pairs(AR.anchorFrames) do
+        f:SetAlpha(AR.anchorsShown and 1 or 0)
+        f:EnableMouse(AR.anchorsShown)
+    end
+    if toggleAnchorsBtn then
+        toggleAnchorsBtn:SetText(AR.anchorsShown and "Hide Anchors" or "Toggle Anchors")
+    end
+end
+
+function AR:CreateAnchors()
+    for _, def in ipairs(ANCHOR_DEFS) do
+        local saved = AR.db.anchors[def.name]
+        local x = (saved and saved.x) or def.x
+        local y = (saved and saved.y) or def.y
+
+        local f = CreateFrame("Frame", "AndeRemindersAnchor_" .. def.name, UIParent, "BackdropTemplate")
+        f:SetSize(def.w, def.h)
+        f:SetPoint("CENTER", UIParent, "CENTER", x, y)
+        f:SetMovable(true)
+        f:SetClampedToScreen(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetFrameStrata("HIGH")
+        f:SetBackdrop({
+            bgFile   = "Interface/Buttons/WHITE8x8",
+            edgeFile = "Interface/Buttons/WHITE8x8",
+            edgeSize = 1,
+        })
+        f:SetBackdropColor(0.1, 0.4, 0.8, 0.4)
+        f:SetBackdropBorderColor(0.4, 0.8, 1, 0.9)
+
+        local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        lbl:SetPoint("CENTER", f, "CENTER", 0, 0)
+        lbl:SetText(def.label)
+        lbl:SetTextColor(1, 1, 1, 1)
+
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", function(self)
+            self:StopMovingOrSizing()
+            local cx, cy = self:GetCenter()
+            local ux, uy = UIParent:GetCenter()
+            local dx = math.floor(cx - ux + 0.5)
+            local dy = math.floor(cy - uy + 0.5)
+            AR.db.anchors[def.name].x = dx
+            AR.db.anchors[def.name].y = dy
+            -- Re-anchor so dependents (notification frames) update correctly
+            self:ClearAllPoints()
+            self:SetPoint("CENTER", UIParent, "CENTER", dx, dy)
+        end)
+
+        f:SetAlpha(0)
+        f:EnableMouse(false)
+
+        AR.anchorFrames[def.name] = f
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Settings window
+-- ---------------------------------------------------------------------------
+
 local settingsFrame
 local activeTabIndex = 0
 
@@ -45,7 +127,6 @@ end
 function AR:CreateSettingsWindow()
     if settingsFrame then return settingsFrame end
 
-    -- Main frame
     local f = CreateFrame("Frame", "AndeRemindersSettings", UIParent, "BackdropTemplate")
     f:SetSize(540, 460)
     f:SetPoint("CENTER")
@@ -56,37 +137,38 @@ function AR:CreateSettingsWindow()
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetFrameStrata("DIALOG")
     f:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
-        tile = true, tileSize = 32, edgeSize = 32,
-        insets = { left = 11, right = 12, top = 12, bottom = 11 },
+        bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
+        tile = true, tileSize = 32,
     })
     f:Hide()
 
-    -- Title text
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", f, "TOP", 0, -14)
     title:SetText("AndeReminders")
 
-    -- Close button
     local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
-    -- Divider below title
     local titleDiv = f:CreateTexture(nil, "ARTWORK")
     titleDiv:SetColorTexture(0.35, 0.35, 0.35, 0.8)
     titleDiv:SetHeight(1)
     titleDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -37)
     titleDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -37)
 
-    -- Build a tab button for each registered module
-    local tabX = 14
-    local TAB_Y      = -40  -- offset from frame top
-    local CONTENT_Y  = TAB_Y - 28
+    -- Toggle Anchors button at the bottom of the window
+    local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    btn:SetSize(150, 24)
+    btn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 12)
+    btn:SetText("Toggle Anchors")
+    btn:SetScript("OnClick", function() AR:ToggleAnchors() end)
+    toggleAnchorsBtn = btn
+
+    local tabX      = 14
+    local TAB_Y     = -40
+    local CONTENT_Y = TAB_Y - 28
 
     for i, entry in ipairs(AR.registeredModules) do
-        -- Tab button
         local tab = CreateFrame("Button", nil, f, "BackdropTemplate")
         tab:SetSize(100, 24)
         tab:SetPoint("TOPLEFT", f, "TOPLEFT", tabX, TAB_Y)
@@ -106,10 +188,9 @@ function AR:CreateSettingsWindow()
         entry.tabButton = tab
         tabX = tabX + 104
 
-        -- Content frame (shared area, show/hide on tab click)
         local content = CreateFrame("Frame", nil, f, "BackdropTemplate")
         content:SetPoint("TOPLEFT",     f, "TOPLEFT",     14, CONTENT_Y)
-        content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 14)
+        content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 44)  -- 44px gap for toggle button
         content:SetBackdrop({
             bgFile   = "Interface/Buttons/WHITE8x8",
             edgeFile = "Interface/Buttons/WHITE8x8",
@@ -121,12 +202,10 @@ function AR:CreateSettingsWindow()
 
         entry.contentFrame = content
 
-        -- Let the module populate its content frame
         if entry.module.BuildUI then
             entry.module:BuildUI(content, AR.db)
         end
 
-        -- Tab hover highlight
         local tabIndex = i
         tab:SetScript("OnEnter", function(self)
             if activeTabIndex ~= tabIndex then
@@ -143,7 +222,6 @@ function AR:CreateSettingsWindow()
         end)
     end
 
-    -- Show first tab by default
     if #AR.registeredModules > 0 then
         SelectTab(1)
     end
@@ -163,20 +241,27 @@ function AR:ToggleSettings()
     end
 end
 
--- Event handling
+-- ---------------------------------------------------------------------------
+-- Bootstrap
+-- ---------------------------------------------------------------------------
+
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:SetScript("OnEvent", function(self, event, addonName)
     if event == "ADDON_LOADED" and addonName == "AndeReminders" then
         AR:InitDB()
+        AR:CreateAnchors()
         AR:CreateSettingsWindow()
         self:UnregisterEvent("ADDON_LOADED")
     end
 end)
 
--- Slash commands
 SLASH_ANDEREMINDERS1 = "/ar"
 SLASH_ANDEREMINDERS2 = "/andereminders"
-SlashCmdList["ANDEREMINDERS"] = function()
-    AR:ToggleSettings()
+SlashCmdList["ANDEREMINDERS"] = function(msg)
+    if msg == "anchors" then
+        AR:ToggleAnchors()
+    else
+        AR:ToggleSettings()
+    end
 end

@@ -2,12 +2,6 @@ local AR = AndeReminders
 
 -- ---------------------------------------------------------------------------
 -- Spec data: primary stat + weapon-type requirements per specialization ID.
---
--- stat         = primary stat the spec's weapons should carry (STR/AGI/INT)
--- require2H    = true if main hand MUST be a 2-handed weapon
--- requireShield= true if off-hand MUST be a shield
--- forbidShield = true if equipping a shield is wrong for this spec
---   (Only set for specs that can physically equip shields but shouldn't.)
 -- ---------------------------------------------------------------------------
 local SPEC_DATA = {
     -- Warrior
@@ -18,54 +12,53 @@ local SPEC_DATA = {
     [65]  = { name = "Holy Paladin",           stat = "INT",                    requireShield = true },
     [66]  = { name = "Prot Paladin",           stat = "STR",                    requireShield = true },
     [70]  = { name = "Ret Paladin",            stat = "STR", require2H = true,  forbidShield = true  },
-    -- Death Knight (DKs cannot equip shields, so no forbid/require flags needed)
+    -- Death Knight
     [250] = { name = "Blood DK",               stat = "STR", require2H = true  },
-    [251] = { name = "Frost DK",               stat = "STR"                    }, -- 2H or dual-1H via talents
+    [251] = { name = "Frost DK",               stat = "STR"                    },
     [252] = { name = "Unholy DK",              stat = "STR", require2H = true  },
-    -- Demon Hunter (cannot equip shields)
+    -- Demon Hunter
     [577] = { name = "Havoc DH",               stat = "AGI" },
     [581] = { name = "Vengeance DH",           stat = "AGI" },
     [1480] = { name = "Devourer DH",           stat = "INT" },
-    -- Druid (cannot equip shields)
+    -- Druid
     [102] = { name = "Balance Druid",          stat = "INT" },
     [103] = { name = "Feral Druid",            stat = "AGI" },
     [104] = { name = "Guardian Druid",         stat = "AGI" },
     [105] = { name = "Resto Druid",            stat = "INT" },
-    -- Evoker (cannot equip shields)
+    -- Evoker
     [1467] = { name = "Devastation Evoker",    stat = "INT" },
     [1468] = { name = "Preservation Evoker",   stat = "INT" },
     [1473] = { name = "Augmentation Evoker",   stat = "INT" },
-    -- Hunter (cannot equip shields)
+    -- Hunter
     [253] = { name = "BM Hunter",              stat = "AGI" },
     [254] = { name = "MM Hunter",              stat = "AGI" },
     [255] = { name = "Survival Hunter",        stat = "AGI" },
-    -- Mage (cannot equip shields)
+    -- Mage
     [62]  = { name = "Arcane Mage",            stat = "INT" },
     [63]  = { name = "Fire Mage",              stat = "INT" },
     [64]  = { name = "Frost Mage",             stat = "INT" },
-    -- Monk (cannot equip shields)
+    -- Monk
     [268] = { name = "Brewmaster Monk",        stat = "AGI" },
     [269] = { name = "Windwalker Monk",        stat = "AGI" },
     [270] = { name = "Mistweaver Monk",        stat = "INT" },
-    -- Priest (cannot equip shields)
+    -- Priest
     [256] = { name = "Disc Priest",            stat = "INT" },
     [257] = { name = "Holy Priest",            stat = "INT" },
     [258] = { name = "Shadow Priest",          stat = "INT" },
-    -- Rogue (cannot equip shields)
+    -- Rogue
     [259] = { name = "Assassination Rogue",    stat = "AGI" },
     [260] = { name = "Outlaw Rogue",           stat = "AGI" },
     [261] = { name = "Subtlety Rogue",         stat = "AGI" },
-    -- Shaman (can equip shields; Enhancement dual-wields and forbids shield)
+    -- Shaman
     [262] = { name = "Elemental Shaman",       stat = "INT" },
     [263] = { name = "Enhancement Shaman",     stat = "AGI", forbidShield = true },
     [264] = { name = "Resto Shaman",           stat = "INT" },
-    -- Warlock (cannot equip shields)
+    -- Warlock
     [265] = { name = "Affliction Warlock",     stat = "INT" },
     [266] = { name = "Demonology Warlock",     stat = "INT" },
     [267] = { name = "Destruction Warlock",    stat = "INT" },
 }
 
--- Weapon subClassIDs that are 2-handed
 local IS_2H = {
     [1]  = true,  -- Axe (2H)
     [5]  = true,  -- Mace (2H)
@@ -77,7 +70,6 @@ local IS_2H = {
     [18] = true,  -- Crossbow
 }
 
--- Human-readable names for equipment slots (shirt/tabard omitted intentionally)
 local SLOT_NAMES = {
     [1]  = "Head",     [2]  = "Neck",      [3]  = "Shoulder",
     [5]  = "Chest",    [6]  = "Waist",     [7]  = "Legs",
@@ -97,17 +89,11 @@ local durabilityWarnFrame = nil
 -- ---------------------------------------------------------------------------
 
 function GearModule:InitDB(db)
-    if not db.gear then
-        db.gear = {}
-    end
-    if not db.gear.notify then
-        db.gear.notify = {}
-    end
+    if not db.gear then db.gear = {} end
+    if not db.gear.notify then db.gear.notify = {} end
     if db.gear.notify.chat   == nil then db.gear.notify.chat   = true end
     if db.gear.notify.screen == nil then db.gear.notify.screen = true end
-    if not db.gear.checks then
-        db.gear.checks = {}
-    end
+    if not db.gear.checks then db.gear.checks = {} end
     if db.gear.checks.weaponType    == nil then db.gear.checks.weaponType    = true end
     if db.gear.checks.weaponStat    == nil then db.gear.checks.weaponStat    = true end
     if db.gear.checks.lowIlvl       == nil then db.gear.checks.lowIlvl       = true end
@@ -116,7 +102,7 @@ function GearModule:InitDB(db)
 end
 
 -- ---------------------------------------------------------------------------
--- On-screen alert (offset below the Enchants alert so they don't overlap)
+-- Gear alert frame (weapon / stat / ilvl issues)
 -- ---------------------------------------------------------------------------
 
 local function GetAlertFrame()
@@ -124,12 +110,15 @@ local function GetAlertFrame()
 
     alertFrame = CreateFrame("Frame", "AndeRemindersGearAlert", UIParent, "BackdropTemplate")
     alertFrame:SetSize(380, 80)
-    alertFrame:SetPoint("TOP", UIParent, "TOP", 0, -300)
-    alertFrame:SetMovable(true)
+
+    local anchor = AR.anchorFrames and AR.anchorFrames["gear"]
+    if anchor then
+        alertFrame:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+    else
+        alertFrame:SetPoint("TOP", UIParent, "TOP", 0, -300)
+    end
+
     alertFrame:EnableMouse(true)
-    alertFrame:RegisterForDrag("LeftButton")
-    alertFrame:SetScript("OnDragStart", alertFrame.StartMoving)
-    alertFrame:SetScript("OnDragStop", alertFrame.StopMovingOrSizing)
     alertFrame:SetFrameStrata("MEDIUM")
     alertFrame:SetBackdrop({
         bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
@@ -153,9 +142,7 @@ local function GetAlertFrame()
     local closeBtn = CreateFrame("Button", nil, alertFrame, "UIPanelCloseButton")
     closeBtn:SetSize(20, 20)
     closeBtn:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", 2, 2)
-    closeBtn:SetScript("OnClick", function()
-        alertFrame:Hide()
-    end)
+    closeBtn:SetScript("OnClick", function() alertFrame:Hide() end)
 
     return alertFrame
 end
@@ -171,14 +158,11 @@ end
 -- Checks
 -- ---------------------------------------------------------------------------
 
--- Returns a list of weapon-type issues for the current spec.
 function GearModule:CheckWeaponType(specData)
     local issues = {}
-
     local mhLink = GetInventoryItemLink("player", 16)
     local ohLink = GetInventoryItemLink("player", 17)
 
-    -- 2H requirement: main hand must be a 2-handed weapon
     if specData.require2H and mhLink then
         local _, _, _, _, _, _, _, _, _, _, _, classId, subClassId = GetItemInfo(mhLink)
         if classId == 2 and not IS_2H[subClassId] then
@@ -186,7 +170,6 @@ function GearModule:CheckWeaponType(specData)
         end
     end
 
-    -- Shield required in off-hand
     if specData.requireShield then
         local hasShield = false
         if ohLink then
@@ -198,7 +181,6 @@ function GearModule:CheckWeaponType(specData)
         end
     end
 
-    -- Shield forbidden in off-hand
     if specData.forbidShield and ohLink then
         local _, _, _, _, _, _, _, _, _, _, _, classId, subClassId = GetItemInfo(ohLink)
         if classId == 4 and subClassId == 6 then
@@ -209,24 +191,21 @@ function GearModule:CheckWeaponType(specData)
     return issues
 end
 
--- Returns a list of issues if the main-hand weapon carries the wrong primary stat.
 function GearModule:CheckWeaponStat(specData)
     local issues = {}
     local mhLink = GetInventoryItemLink("player", 16)
     if not mhLink then return issues end
 
-    -- Only check actual weapons
     local _, _, _, _, _, _, _, _, _, _, _, classId = GetItemInfo(mhLink)
     if classId ~= 2 then return issues end
 
     local stats = C_Item.GetItemStats(mhLink)
     if not stats then return issues end
 
-    local hasSTR = (stats["ITEM_MOD_STRENGTH_SHORT"] or 0) > 0
-    local hasAGI = (stats["ITEM_MOD_AGILITY_SHORT"]  or 0) > 0
-    local hasINT = (stats["ITEM_MOD_INTELLECT_SHORT"] or 0) > 0
+    local hasSTR = (stats["ITEM_MOD_STRENGTH_SHORT"]  or 0) > 0
+    local hasAGI = (stats["ITEM_MOD_AGILITY_SHORT"]   or 0) > 0
+    local hasINT = (stats["ITEM_MOD_INTELLECT_SHORT"]  or 0) > 0
 
-    -- If the weapon has no primary stat at all (e.g. cosmetic/wand), skip
     if not hasSTR and not hasAGI and not hasINT then return issues end
 
     local wrong = false
@@ -241,8 +220,6 @@ function GearModule:CheckWeaponStat(specData)
     return issues
 end
 
--- Returns a list of slots with item level below the threshold.
--- Skips shirt (slot 4) and tabard (slot 19).
 function GearModule:CheckLowItemLevel(threshold)
     local issues = {}
     for slot, slotName in pairs(SLOT_NAMES) do
@@ -257,17 +234,23 @@ function GearModule:CheckLowItemLevel(threshold)
     return issues
 end
 
+-- ---------------------------------------------------------------------------
+-- Durability warning frame (separate anchor from gear alerts)
+-- ---------------------------------------------------------------------------
+
 local function GetDurabilityWarnFrame()
     if durabilityWarnFrame then return durabilityWarnFrame end
 
     durabilityWarnFrame = CreateFrame("Frame", "AndeRemindersDurabilityWarn", UIParent)
     durabilityWarnFrame:SetSize(1200, 70)
-    durabilityWarnFrame:SetPoint("TOP", UIParent, "TOP", 0, -380)
-    durabilityWarnFrame:SetMovable(true)
-    durabilityWarnFrame:EnableMouse(true)
-    durabilityWarnFrame:RegisterForDrag("LeftButton")
-    durabilityWarnFrame:SetScript("OnDragStart", durabilityWarnFrame.StartMoving)
-    durabilityWarnFrame:SetScript("OnDragStop", durabilityWarnFrame.StopMovingOrSizing)
+
+    local anchor = AR.anchorFrames and AR.anchorFrames["repair"]
+    if anchor then
+        durabilityWarnFrame:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+    else
+        durabilityWarnFrame:SetPoint("TOP", UIParent, "TOP", 0, -380)
+    end
+
     durabilityWarnFrame:SetFrameStrata("MEDIUM")
     durabilityWarnFrame:Hide()
 
@@ -280,7 +263,6 @@ local function GetDurabilityWarnFrame()
     return durabilityWarnFrame
 end
 
--- Returns true if any equipped slot has durability below 50%.
 function GearModule:CheckLowDurability()
     for slot in pairs(SLOT_NAMES) do
         local current, max = GetInventoryItemDurability(slot)
@@ -291,7 +273,6 @@ function GearModule:CheckLowDurability()
     return false
 end
 
--- Shows or hides the persistent durability warning; skipped while in combat.
 function GearModule:RunDurabilityCheck()
     if not AR.db or not AR.db.gear then return end
     if not AR.db.gear.checks.lowDurability then return end
@@ -305,7 +286,6 @@ function GearModule:RunDurabilityCheck()
     end
 end
 
--- Run all enabled checks and dispatch notifications.
 function GearModule:RunCheck()
     if UnitLevel("player") < 90 then return end
     if not AR.db or not AR.db.gear then return end
@@ -319,15 +299,11 @@ function GearModule:RunCheck()
     local issues = {}
 
     if db.gear.checks.weaponType and specData then
-        for _, v in ipairs(self:CheckWeaponType(specData)) do
-            table.insert(issues, v)
-        end
+        for _, v in ipairs(self:CheckWeaponType(specData)) do table.insert(issues, v) end
     end
 
     if db.gear.checks.weaponStat and specData then
-        for _, v in ipairs(self:CheckWeaponStat(specData)) do
-            table.insert(issues, v)
-        end
+        for _, v in ipairs(self:CheckWeaponStat(specData)) do table.insert(issues, v) end
     end
 
     if db.gear.checks.lowIlvl then
@@ -369,35 +345,29 @@ gearEvents:RegisterEvent("PLAYER_LOGIN")
 gearEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 gearEvents:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 gearEvents:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
-gearEvents:SetScript("OnEvent", function(_, event)
-    ScheduleCheck()
-end)
+gearEvents:SetScript("OnEvent", function() ScheduleCheck() end)
 
 local durabilityEvents = CreateFrame("Frame")
 durabilityEvents:RegisterEvent("PLAYER_DEAD")
 durabilityEvents:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
 durabilityEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
-durabilityEvents:SetScript("OnEvent", function()
-    GearModule:RunDurabilityCheck()
-end)
+durabilityEvents:SetScript("OnEvent", function() GearModule:RunDurabilityCheck() end)
 
 -- ---------------------------------------------------------------------------
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
 function GearModule:BuildUI(parent, db)
-    local X        = 12
-    local ROW_H    = 28
-    local CHECK_X  = 12
-    local LABEL_X  = 40
+    local X       = 12
+    local ROW_H   = 28
+    local CHECK_X = 12
+    local LABEL_X = 40
 
-    -- Section title
     local title = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", X, -10)
     title:SetText("Gear Reminders")
     title:SetTextColor(1, 0.82, 0)
 
-    -- Notification row
     local notifyLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     notifyLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", X, -36)
     notifyLabel:SetText("Notify via:")
@@ -423,7 +393,6 @@ function GearModule:BuildUI(parent, db)
     cbScreenLabel:SetPoint("LEFT", cbScreen, "RIGHT", 2, 0)
     cbScreenLabel:SetText("On-screen")
 
-    -- Divider
     local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     div:SetHeight(1)
     div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
@@ -431,10 +400,8 @@ function GearModule:BuildUI(parent, db)
     div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, -60)
     div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, -60)
 
-    -- ---- Check rows ----
     local ROWS_TOP = -70
 
-    -- Row 1: Wrong weapon type
     local cbWT = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbWT:SetSize(22, 22)
     cbWT:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP)
@@ -445,7 +412,6 @@ function GearModule:BuildUI(parent, db)
     lWT:SetPoint("LEFT", cbWT, "RIGHT", 6, 0)
     lWT:SetText("Wrong weapon type for spec (2H / 1H / shield)")
 
-    -- Row 2: Wrong weapon main stat
     local cbWS = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbWS:SetSize(22, 22)
     cbWS:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H)
@@ -456,7 +422,6 @@ function GearModule:BuildUI(parent, db)
     lWS:SetPoint("LEFT", cbWS, "RIGHT", 6, 0)
     lWS:SetText("Wrong main stat on weapon (STR / AGI / INT)")
 
-    -- Row 3: Low item level
     local cbIL = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbIL:SetSize(22, 22)
     cbIL:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 2)
@@ -486,7 +451,6 @@ function GearModule:BuildUI(parent, db)
     lILunit:SetText("ilvl  (ignores shirt & tabard)")
     lILunit:SetTextColor(0.65, 0.65, 0.65)
 
-    -- Footer note about trinkets
     local note = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     note:SetPoint("TOPLEFT", parent, "TOPLEFT", X, ROWS_TOP - ROW_H * 3 - 10)
     note:SetText("Note: trinket stat checking is not supported — too many trinkets carry no primary stat.")
@@ -495,7 +459,6 @@ function GearModule:BuildUI(parent, db)
     note:SetWordWrap(true)
     note:SetJustifyH("LEFT")
 
-    -- Divider before durability section
     local div2 = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     div2:SetHeight(1)
     div2:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
@@ -503,7 +466,6 @@ function GearModule:BuildUI(parent, db)
     div2:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, ROWS_TOP - ROW_H * 3 - 54)
     div2:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, ROWS_TOP - ROW_H * 3 - 54)
 
-    -- Row 4: Low durability warning
     local cbDur = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbDur:SetSize(22, 22)
     cbDur:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 3 - 68)

@@ -1,9 +1,8 @@
 local AR = AndeReminders
 
 local TalentModule = {}
-local buildTextFrame = nil -- loose flash text for active build
+local buildTextFrame = nil
 
--- LibSharedMedia-3.0 integration (optional — falls back to built-in fonts if not present)
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
 local FALLBACK_FONT_NAMES = { "Friz Quadrata TT", "Morpheus", "Skurri", "Arial Narrow" }
@@ -38,15 +37,13 @@ function TalentModule:InitDB(db)
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
     if not db.talents.buildText then db.talents.buildText = {} end
     if not db.talents.buildText.fontName then db.talents.buildText.fontName = DEFAULT_FONT_NAME end
-    if db.talents.buildText.r       == nil then db.talents.buildText.r       = 1   end
-    if db.talents.buildText.g       == nil then db.talents.buildText.g       = 0.8 end
-    if db.talents.buildText.b       == nil then db.talents.buildText.b       = 0   end
-    if db.talents.buildText.xOffset == nil then db.talents.buildText.xOffset = 0   end
-    if db.talents.buildText.yOffset == nil then db.talents.buildText.yOffset = 150 end
+    if db.talents.buildText.r == nil then db.talents.buildText.r = 1   end
+    if db.talents.buildText.g == nil then db.talents.buildText.g = 0.8 end
+    if db.talents.buildText.b == nil then db.talents.buildText.b = 0   end
 end
 
 -- ---------------------------------------------------------------------------
--- Active build flash text (no box, configurable font/color, center screen, 10s)
+-- Build text flash (full-screen non-interactive frame, text at anchor position)
 -- ---------------------------------------------------------------------------
 
 local function GetBuildTextFrame()
@@ -60,7 +57,6 @@ local function GetBuildTextFrame()
     local fs = f:CreateFontString(nil, "OVERLAY")
     fs:SetShadowColor(0, 0, 0, 1)
     fs:SetShadowOffset(2, -2)
-    fs:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     fs:SetJustifyH("CENTER")
     f.text = fs
 
@@ -73,13 +69,18 @@ function TalentModule:ShowBuildText(name, icon)
     local btf = GetBuildTextFrame()
     local cfg = AR.db and AR.db.talents and AR.db.talents.buildText
     local fontName = (cfg and cfg.fontName) or DEFAULT_FONT_NAME
-    local r        = (cfg and cfg.r)        or 1
-    local g        = (cfg and cfg.g)        or 0.8
-    local b        = (cfg and cfg.b)        or 0
-    local xOff     = (cfg and cfg.xOffset)  or 0
-    local yOff     = (cfg and cfg.yOffset)  or 0
+    local r = (cfg and cfg.r) or 1
+    local g = (cfg and cfg.g) or 0.8
+    local b = (cfg and cfg.b) or 0
+
     btf.text:ClearAllPoints()
-    btf.text:SetPoint("CENTER", UIParent, "CENTER", xOff, yOff)
+    local anchor = AR.anchorFrames and AR.anchorFrames["talents"]
+    if anchor then
+        btf.text:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+    else
+        btf.text:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
+    end
+
     btf.text:SetFont(ResolveFontPath(fontName), 36, "OUTLINE")
     btf.text:SetTextColor(r, g, b)
 
@@ -107,23 +108,13 @@ end
 -- Logic
 -- ---------------------------------------------------------------------------
 
--- Returns the name and icon of the currently active talent loadout.
--- Uses TLX.GetLoadedData() (TalentLoadoutEx public API) if available, otherwise
--- falls back to the native WoW saved-config name (no icon in that case).
--- icon may be a numeric texture ID or an atlas name string.
 local function GetActiveLoadoutInfo()
     if C_AddOns and C_AddOns.LoadAddOn then
-        -- Blizzard_PlayerSpells must be loaded BEFORE TalentLoadoutEx so that
-        -- TLX's RegisterAddonLoad("Blizzard_PlayerSpells", ..., "InitFrame") finds
-        -- it already present and calls InitFrame immediately instead of waiting for
-        -- an ADDON_LOADED event that won't re-fire.
         C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
         C_AddOns.LoadAddOn("Blizzard_TalentUI")
         C_AddOns.LoadAddOn("TalentLoadoutEx")
     end
 
-    -- TalentLoadoutEx: TLX.GetLoadedData() returns the first data object whose
-    -- talent string matches the current active configuration.
     if TLX and TLX.GetLoadedData then
         local data = TLX.GetLoadedData()
         if data and data.name then
@@ -131,7 +122,6 @@ local function GetActiveLoadoutInfo()
         end
     end
 
-    -- Native WoW loadout name (no icon available)
     local specIndex = GetSpecialization()
     if not specIndex then return nil, nil end
     local specID = select(1, GetSpecializationInfo(specIndex))
@@ -150,13 +140,9 @@ end
 function TalentModule:RunCheck(isReadyCheck)
     if not AR.db then return end
     local db = AR.db
-
-    -- Show active build as flash text (ready check only)
     if db.talents.checks.showActiveBuild and isReadyCheck then
         local name, icon = GetActiveLoadoutInfo()
-        if name then
-            self:ShowBuildText(name, icon)
-        end
+        if name then self:ShowBuildText(name, icon) end
     end
 end
 
@@ -174,10 +160,6 @@ talentEvents:SetScript("OnEvent", function(self, event)
         TalentModule:RunCheck(true)
     elseif event == "PLAYER_ENTERING_WORLD" and not tlxInitDone then
         tlxInitDone = true
-        -- TLX's GetExportText() needs PlayerSpellsFrame.TalentsFrame:GetTreeInfo()
-        -- which only returns non-nil after the frame's OnShow fires (SetupSpec).
-        -- Showing and hiding the frame in the same Lua tick triggers OnShow without
-        -- any visible flash, forcing TLX to initialize its loadedDataList.
         C_Timer.After(2, function()
             if C_AddOns and C_AddOns.LoadAddOn then
                 C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
@@ -199,16 +181,13 @@ function TalentModule:BuildUI(parent, db)
     local COL_NAME_X = 12
     local ROW_HEIGHT = 32
 
-    -- Section title
     local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
     sectionTitle:SetText("Talent Reminders")
     sectionTitle:SetTextColor(1, 0.82, 0)
 
-    -- ---- Check rows ----
     local y = -36
 
-    -- Show active build
     local cbActiveBuild = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbActiveBuild:SetSize(24, 24)
     cbActiveBuild:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
@@ -228,7 +207,6 @@ function TalentModule:BuildUI(parent, db)
     tleNote:SetText("Uses TalentLoadoutEx names if the addon is loaded.")
     tleNote:SetTextColor(0.5, 0.5, 0.5)
 
-    -- ---- Divider before build text appearance options ----
     y = y - 18
     local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     div:SetHeight(1)
@@ -239,7 +217,6 @@ function TalentModule:BuildUI(parent, db)
 
     y = y - 14
 
-    -- ---- Font selector ----
     local fontSectionLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     fontSectionLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
     fontSectionLabel:SetText("Build text appearance:")
@@ -251,7 +228,6 @@ function TalentModule:BuildUI(parent, db)
     fontLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
     fontLabel:SetText("Font:")
 
-    -- Build font list (from LSM if available, else fallback)
     local fontNames = GetFontNames()
     local fontIndex = 1
     for i, name in ipairs(fontNames) do
@@ -268,14 +244,11 @@ function TalentModule:BuildUI(parent, db)
     local maxScroll   = math.max(0, totalH - visibleH)
     local hasScrollbar = maxScroll > 0
 
-    -- Dropdown trigger button
     local dropBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     dropBtn:SetSize(POPUP_WIDTH, 22)
     dropBtn:SetPoint("LEFT", fontLabel, "RIGHT", 10, 0)
     dropBtn:SetText(fontNames[fontIndex])
 
-    -- Popup (child of parent so it rides with the settings window;
-    -- elevated frame level so it renders above all sibling content)
     local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     popup:SetSize(POPUP_WIDTH, visibleH + 4)
     popup:SetFrameLevel(parent:GetFrameLevel() + 20)
@@ -291,7 +264,6 @@ function TalentModule:BuildUI(parent, db)
     popup:SetPoint("TOPLEFT", dropBtn, "BOTTOMLEFT", 0, -2)
     popup:Hide()
 
-    -- Scroll frame (leave room on the right for scrollbar when needed)
     local scrollRightOffset = hasScrollbar and -(SCROLLBAR_W + 4) or -2
     local scrollFrame = CreateFrame("ScrollFrame", nil, popup)
     scrollFrame:SetPoint("TOPLEFT",     popup, "TOPLEFT",     2, -2)
@@ -302,7 +274,6 @@ function TalentModule:BuildUI(parent, db)
     content:SetHeight(math.max(totalH, 1))
     scrollFrame:SetScrollChild(content)
 
-    -- Item buttons
     local itemBtns = {}
     for i, name in ipairs(fontNames) do
         local btn = CreateFrame("Button", nil, content)
@@ -338,10 +309,8 @@ function TalentModule:BuildUI(parent, db)
         itemBtns[i] = btn
     end
 
-    -- Scrollbar
-    local scrollBar
     if hasScrollbar then
-        scrollBar = CreateFrame("Slider", nil, popup)
+        local scrollBar = CreateFrame("Slider", nil, popup)
         scrollBar:SetOrientation("VERTICAL")
         scrollBar:SetWidth(SCROLLBAR_W)
         scrollBar:SetPoint("TOPRIGHT",    popup, "TOPRIGHT",    -2, -18)
@@ -364,21 +333,21 @@ function TalentModule:BuildUI(parent, db)
             local min, max = scrollBar:GetMinMaxValues()
             scrollBar:SetValue(math.max(min, math.min(max, cur - delta * ITEM_HEIGHT * 3)))
         end)
-    end
 
-    -- Toggle popup; on open, scroll to show the selected item
-    dropBtn:SetScript("OnClick", function()
-        if popup:IsShown() then
-            popup:Hide()
-        else
-            popup:Show()
-            if scrollBar and maxScroll > 0 then
+        dropBtn:SetScript("OnClick", function()
+            if popup:IsShown() then
+                popup:Hide()
+            else
+                popup:Show()
                 scrollBar:SetValue(math.min((fontIndex - 1) * ITEM_HEIGHT, maxScroll))
             end
-        end
-    end)
+        end)
+    else
+        dropBtn:SetScript("OnClick", function()
+            if popup:IsShown() then popup:Hide() else popup:Show() end
+        end)
+    end
 
-    -- Close popup when the settings tab is hidden
     parent:HookScript("OnHide", function() popup:Hide() end)
 
     -- ---- Color picker ----
@@ -395,7 +364,7 @@ function TalentModule:BuildUI(parent, db)
     swatchBorder:SetColorTexture(0.5, 0.5, 0.5, 1)
 
     local swatchTex = swatch:CreateTexture(nil, "ARTWORK")
-    swatchTex:SetPoint("TOPLEFT", swatch, "TOPLEFT", 1, -1)
+    swatchTex:SetPoint("TOPLEFT",     swatch, "TOPLEFT",     1, -1)
     swatchTex:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", -1, 1)
     swatchTex:SetColorTexture(db.talents.buildText.r, db.talents.buildText.g, db.talents.buildText.b)
 
@@ -416,75 +385,10 @@ function TalentModule:BuildUI(parent, db)
         })
     end)
 
-    -- ---- Offset inputs ----
-    y = y - ROW_HEIGHT
-
-    local xOffLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    xOffLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-    xOffLabel:SetText("X Offset:")
-
-    local xOffBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    xOffBox:SetSize(55, 20)
-    xOffBox:SetPoint("LEFT", xOffLabel, "RIGHT", 6, 0)
-    xOffBox:SetAutoFocus(false)
-    xOffBox:SetText(tostring(db.talents.buildText.xOffset))
-
-    local yOffLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    yOffLabel:SetPoint("LEFT", xOffBox, "RIGHT", 14, 0)
-    yOffLabel:SetText("Y Offset:")
-
-    local yOffBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    yOffBox:SetSize(55, 20)
-    yOffBox:SetPoint("LEFT", yOffLabel, "RIGHT", 6, 0)
-    yOffBox:SetAutoFocus(false)
-    yOffBox:SetText(tostring(db.talents.buildText.yOffset))
-
-    -- Refreshes the text position live while preview is visible
-    local function refreshPreviewPosition()
-        if buildTextFrame and buildTextFrame:IsShown() then
-            buildTextFrame.text:ClearAllPoints()
-            buildTextFrame.text:SetPoint("CENTER", UIParent, "CENTER",
-                db.talents.buildText.xOffset or 0,
-                db.talents.buildText.yOffset or 0)
-        end
-    end
-
-    local function commitXOff()
-        local val = tonumber(xOffBox:GetText())
-        if val then
-            db.talents.buildText.xOffset = val
-            refreshPreviewPosition()
-        else
-            xOffBox:SetText(tostring(db.talents.buildText.xOffset))
-        end
-        xOffBox:ClearFocus()
-    end
-    xOffBox:SetScript("OnEnterPressed", commitXOff)
-    xOffBox:SetScript("OnEscapePressed", function()
-        xOffBox:SetText(tostring(db.talents.buildText.xOffset))
-        xOffBox:ClearFocus()
-    end)
-
-    local function commitYOff()
-        local val = tonumber(yOffBox:GetText())
-        if val then
-            db.talents.buildText.yOffset = val
-            refreshPreviewPosition()
-        else
-            yOffBox:SetText(tostring(db.talents.buildText.yOffset))
-        end
-        yOffBox:ClearFocus()
-    end
-    yOffBox:SetScript("OnEnterPressed", commitYOff)
-    yOffBox:SetScript("OnEscapePressed", function()
-        yOffBox:SetText(tostring(db.talents.buildText.yOffset))
-        yOffBox:ClearFocus()
-    end)
-
-    -- ---- Preview toggle button ----
+    -- ---- Preview button (same row as font/color) ----
     local previewBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     previewBtn:SetSize(100, 22)
-    previewBtn:SetPoint("LEFT", yOffBox, "RIGHT", 20, 0)
+    previewBtn:SetPoint("LEFT", swatch, "RIGHT", 20, 0)
     previewBtn:SetText("Preview")
 
     previewBtn:SetScript("OnClick", function()
@@ -496,14 +400,12 @@ function TalentModule:BuildUI(parent, db)
         else
             local name, icon = GetActiveLoadoutInfo()
             TalentModule:ShowBuildText(name or "Your Talent Build", icon)
-            -- Cancel the auto-hide so it stays until dismissed
             local btf2 = GetBuildTextFrame()
             if btf2.hideTimer then btf2.hideTimer:Cancel(); btf2.hideTimer = nil end
             previewBtn:SetText("Hide Preview")
         end
     end)
 
-    -- Reset the button label if the settings tab is hidden while preview is up
     parent:HookScript("OnHide", function()
         previewBtn:SetText("Preview")
     end)
