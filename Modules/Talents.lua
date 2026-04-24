@@ -164,10 +164,31 @@ end
 -- Events
 -- ---------------------------------------------------------------------------
 
+local tlxInitDone = false
+
 local talentEvents = CreateFrame("Frame")
 talentEvents:RegisterEvent("READY_CHECK")
-talentEvents:SetScript("OnEvent", function(_, event)
-    TalentModule:RunCheck(true)
+talentEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
+talentEvents:SetScript("OnEvent", function(self, event)
+    if event == "READY_CHECK" then
+        TalentModule:RunCheck(true)
+    elseif event == "PLAYER_ENTERING_WORLD" and not tlxInitDone then
+        tlxInitDone = true
+        -- TLX's GetExportText() needs PlayerSpellsFrame.TalentsFrame:GetTreeInfo()
+        -- which only returns non-nil after the frame's OnShow fires (SetupSpec).
+        -- Showing and hiding the frame in the same Lua tick triggers OnShow without
+        -- any visible flash, forcing TLX to initialize its loadedDataList.
+        C_Timer.After(2, function()
+            if C_AddOns and C_AddOns.LoadAddOn then
+                C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
+                C_AddOns.LoadAddOn("TalentLoadoutEx")
+            end
+            if PlayerSpellsFrame and not PlayerSpellsFrame:IsShown() then
+                PlayerSpellsFrame:Show()
+                PlayerSpellsFrame:Hide()
+            end
+        end)
+    end
 end)
 
 -- ---------------------------------------------------------------------------
