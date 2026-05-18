@@ -37,6 +37,7 @@ function TalentModule:InitDB(db)
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
     if not db.talents.buildText then db.talents.buildText = {} end
     if not db.talents.buildText.fontName then db.talents.buildText.fontName = DEFAULT_FONT_NAME end
+    if db.talents.buildText.fontSize == nil then db.talents.buildText.fontSize = 36 end
     if db.talents.buildText.r == nil then db.talents.buildText.r = 1   end
     if db.talents.buildText.g == nil then db.talents.buildText.g = 0.8 end
     if db.talents.buildText.b == nil then db.talents.buildText.b = 0   end
@@ -69,6 +70,7 @@ function TalentModule:ShowBuildText(name, icon)
     local btf = GetBuildTextFrame()
     local cfg = AR.db and AR.db.talents and AR.db.talents.buildText
     local fontName = (cfg and cfg.fontName) or DEFAULT_FONT_NAME
+    local fontSize = (cfg and cfg.fontSize) or 36
     local r = (cfg and cfg.r) or 1
     local g = (cfg and cfg.g) or 0.8
     local b = (cfg and cfg.b) or 0
@@ -81,15 +83,15 @@ function TalentModule:ShowBuildText(name, icon)
         btf.text:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
     end
 
-    btf.text:SetFont(ResolveFontPath(fontName), 36, "OUTLINE")
+    btf.text:SetFont(ResolveFontPath(fontName), fontSize, "OUTLINE")
     btf.text:SetTextColor(r, g, b)
 
     local displayText
     if icon then
         if type(icon) == "string" then
-            displayText = string.format("|A:%s:36:36|a %s", icon, name)
+            displayText = string.format("|A:%s:%d:%d|a %s", icon, fontSize, fontSize, name)
         else
-            displayText = string.format("|T%d:36:36|t %s", icon, name)
+            displayText = string.format("|T%d:%d:%d|t %s", icon, fontSize, fontSize, name)
         end
     else
         displayText = name
@@ -143,7 +145,7 @@ function TalentModule:RunCheck(isReadyCheck)
     local db = AR.db
     if db.talents.checks.showActiveBuild and isReadyCheck then
         local name, icon = GetActiveLoadoutInfo()
-        if name then self:ShowBuildText(name, icon) end
+        self:ShowBuildText(name or "unknown talent loadout", icon)
     end
 end
 
@@ -389,10 +391,32 @@ function TalentModule:BuildUI(parent, db)
         })
     end)
 
+    -- ---- Font size input (same row as font/color) ----
+    local sizeLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    sizeLabel:SetPoint("LEFT", swatch, "RIGHT", 20, 0)
+    sizeLabel:SetText("Size:")
+
+    local sizeInput = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    sizeInput:SetSize(44, 20)
+    sizeInput:SetPoint("LEFT", sizeLabel, "RIGHT", 6, -1)
+    sizeInput:SetAutoFocus(false)
+    sizeInput:SetNumeric(true)
+    sizeInput:SetMaxLetters(3)
+    sizeInput:SetText(tostring(db.talents.buildText.fontSize or 36))
+
+    local function SaveFontSize(self)
+        local v = tonumber(self:GetText()) or 36
+        if v < 6 then v = 6 elseif v > 200 then v = 200 end
+        db.talents.buildText.fontSize = v
+        self:SetText(tostring(v))
+    end
+    sizeInput:SetScript("OnEnterPressed",   function(self) SaveFontSize(self); self:ClearFocus() end)
+    sizeInput:SetScript("OnEditFocusLost",  SaveFontSize)
+
     -- ---- Preview button (same row as font/color) ----
     local previewBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     previewBtn:SetSize(100, 22)
-    previewBtn:SetPoint("LEFT", swatch, "RIGHT", 20, 0)
+    previewBtn:SetPoint("LEFT", sizeInput, "RIGHT", 16, 1)
     previewBtn:SetText("Preview")
 
     previewBtn:SetScript("OnClick", function()
