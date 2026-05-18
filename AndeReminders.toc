@@ -10,3 +10,4 @@ AndeReminders.lua
 Modules\Enchants.lua
 Modules\Gear.lua
 Modules\Talents.lua
+Modules\Encounter.lua

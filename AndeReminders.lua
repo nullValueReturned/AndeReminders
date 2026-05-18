@@ -6,10 +6,11 @@ AR.anchorFrames      = {}
 AR.anchorsShown      = false
 
 local ANCHOR_DEFS = {
-    { name = "talents",  label = "Talent Build",   x = 0, y = 180, w = 300, h = 60 },
-    { name = "enchants", label = "Enchant Alerts", x = 0, y = 90,  w = 360, h = 80 },
-    { name = "gear",     label = "Gear Alerts",    x = 0, y = 0,   w = 380, h = 80 },
-    { name = "repair",   label = "Repair Warning", x = 0, y = -90, w = 500, h = 70 },
+    { name = "encounter", label = "Combat Text",    x = 0, y = 260, w = 200, h = 50 },
+    { name = "talents",   label = "Talent Build",   x = 0, y = 180, w = 300, h = 60 },
+    { name = "enchants",  label = "Enchant Alerts", x = 0, y = 90,  w = 360, h = 80 },
+    { name = "gear",      label = "Gear Alerts",    x = 0, y = 0,   w = 380, h = 80 },
+    { name = "repair",    label = "Repair Warning", x = 0, y = -90, w = 500, h = 70 },
 }
 
 function AR:RegisterModule(name, module)
