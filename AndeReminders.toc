@@ -6,8 +6,14 @@
 ## SavedVariables: AndeRemindersDB
 ## OptionalDeps: LibSharedMedia-3.0
 
+Libs\LibStub\LibStub.lua
+Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
+Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
+Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+
 AndeReminders.lua
 Modules\Enchants.lua
 Modules\Gear.lua
 Modules\Talents.lua
 Modules\Encounter.lua
+Modules\QoL.lua
