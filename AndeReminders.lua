@@ -129,7 +129,7 @@ function AR:CreateSettingsWindow()
     if settingsFrame then return settingsFrame end
 
     local f = CreateFrame("Frame", "AndeRemindersSettings", UIParent, "BackdropTemplate")
-    f:SetSize(540, 460)
+    f:SetSize(690, 460)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:EnableMouse(true)
