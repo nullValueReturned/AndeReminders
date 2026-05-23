@@ -240,8 +240,8 @@ end
 -- ---------------------------------------------------------------------------
 
 local events = CreateFrame("Frame")
-events:RegisterEvent("WEEKLY_REWARDS_HIDE")
 events:RegisterEvent("WEEKLY_REWARDS_UPDATE")
+events:RegisterEvent("WEEKLY_REWARDS_ITEM_CHANGED")
 events:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 events:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 events:RegisterEvent("LFG_ROLE_CHECK_SHOW")
