@@ -94,6 +94,9 @@ function QoLModule:InitDB(db)
     -- LibDBIcon manages: hide, minimapPos, lock, radius. Default to shown.
     if db.qol.greatVault.hide == nil then db.qol.greatVault.hide = false end
 
+    if not db.qol.autoAcceptLFG then db.qol.autoAcceptLFG = {} end
+    if db.qol.autoAcceptLFG.enabled == nil then db.qol.autoAcceptLFG.enabled = false end
+
     LDB     = LibStub and LibStub("LibDataBroker-1.1", true)
     LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
     if not LDB or not LDBIcon then return end
@@ -169,6 +172,67 @@ function QoLModule:BuildUI(parent, db)
     vaultNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 30, y)
     vaultNote:SetText("Drag the button around the minimap to reposition.")
     vaultNote:SetTextColor(0.5, 0.5, 0.5)
+
+    y = y - 28
+
+    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+    div:SetHeight(1)
+    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
+    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
+    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, y)
+    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, y)
+
+    y = y - 14
+
+    local cbLFG = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    cbLFG:SetSize(24, 24)
+    cbLFG:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+    cbLFG:SetChecked(db.qol.autoAcceptLFG.enabled)
+    cbLFG:SetScript("OnClick", function(self)
+        db.qol.autoAcceptLFG.enabled = self:GetChecked()
+    end)
+
+    local lfgLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lfgLabel:SetPoint("LEFT", cbLFG, "RIGHT", 6, 0)
+    lfgLabel:SetText("Auto-accept LFG role checks")
+
+    y = y - 20
+
+    local lfgNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lfgNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 30, y)
+    lfgNote:SetText("Uses your currently assigned role, or your spec role if none assigned.")
+    lfgNote:SetTextColor(0.5, 0.5, 0.5)
+end
+
+-- ---------------------------------------------------------------------------
+-- Auto-accept LFG role checks
+-- ---------------------------------------------------------------------------
+
+local function AutoAcceptLFGRoleCheck()
+    if not AR.db or not AR.db.qol or not AR.db.qol.autoAcceptLFG.enabled then return end
+
+    local role = UnitGroupRolesAssigned("player")
+    if role == "NONE" then
+        role = GetSpecializationRole(GetSpecialization())
+    end
+
+    local tank   = role == "TANK"
+    local healer = role == "HEALER"
+    local dps    = role == "DAMAGER"
+
+    if LFDRoleCheckPopupRoleButtonTank and LFDRoleCheckPopupRoleButtonTank.checkButton:IsEnabled() then
+        LFDRoleCheckPopupRoleButtonTank.checkButton:SetChecked(tank)
+    end
+    if LFDRoleCheckPopupRoleButtonHealer and LFDRoleCheckPopupRoleButtonHealer.checkButton:IsEnabled() then
+        LFDRoleCheckPopupRoleButtonHealer.checkButton:SetChecked(healer)
+    end
+    if LFDRoleCheckPopupRoleButtonDPS and LFDRoleCheckPopupRoleButtonDPS.checkButton:IsEnabled() then
+        LFDRoleCheckPopupRoleButtonDPS.checkButton:SetChecked(dps)
+    end
+    if LFDRoleCheckPopupAcceptButton then
+        LFDRoleCheckPopupAcceptButton:Enable()
+        LFDRoleCheckPopupAcceptButton:Click()
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -180,8 +244,13 @@ events:RegisterEvent("WEEKLY_REWARDS_HIDE")
 events:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 events:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 events:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
-events:SetScript("OnEvent", function()
-    RecheckIcon()
+events:RegisterEvent("LFG_ROLE_CHECK_SHOW")
+events:SetScript("OnEvent", function(_, event)
+    if event == "LFG_ROLE_CHECK_SHOW" then
+        AutoAcceptLFGRoleCheck()
+    else
+        RecheckIcon()
+    end
 end)
 
 AR:RegisterModule("QoL", QoLModule)
