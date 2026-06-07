@@ -689,7 +689,7 @@ local function ScrollDrop(parent, w, opts, getter, setter, kind)
     local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     btn:SetSize(w, 22)
     local bfs = btn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",btn,"LEFT",8,0); bfs:SetPoint("RIGHT",btn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
-    local arrowFs = btn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",btn,"RIGHT",-5,0); arrowFs:SetText("▼")
+    local arrowFs = btn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",btn,"RIGHT",-5,0); arrowFs:SetText("v")
 
     local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     popup:SetSize(w, visH + 4)
