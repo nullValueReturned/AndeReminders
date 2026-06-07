@@ -53,7 +53,7 @@ local EDEFS = {
     annSpellId="", annText="",  annTextOp="find", annCount="", annDuration=5,
     tmrSpellId="", tmrText="",  tmrTextOp="find", tmrCount="", tmrRemaining="",
     trigStage    = "",
-    loadClass="", loadEncId="", loadDiff="",
+    loadClass="", loadEncId="", loadDiff="", loadRole="",
 }
 
 local function ApplyDefs(e)
@@ -161,6 +161,11 @@ local function PassesLoad(e)
         local diff = select(3, GetInstanceInfo())
         if tostring(diff) ~= e.loadDiff then return false end
     end
+    if e.loadRole ~= "" then
+        local role = UnitGroupRolesAssigned("player")
+        if role == "NONE" then role = GetSpecializationRole(GetSpecialization()) end
+        if role ~= e.loadRole then return false end
+    end
     return true
 end
 
@@ -190,9 +195,20 @@ HandleAnnounce = function(data)
     local db = AR.db; if not db or not db.bossmods then return end
     for id, e in pairs(db.bossmods.entries) do
         if MatchAnn(e, data) and PassesLoad(e) then
-            ShowEntryFrame(e, data)
-            if annTimers[id] then annTimers[id]:Cancel() end
             local dur = (e.annDuration and e.annDuration > 0) and e.annDuration or 5
+            -- Build a per-entry data copy with duration/expirationTime so bar frames
+            -- can count down using annDuration and %t resolves correctly.
+            local annData = {
+                source         = data.source,
+                spellId        = data.spellId,
+                text           = data.text,
+                icon           = data.icon,
+                count          = data.count,
+                duration       = dur,
+                expirationTime = GetTime() + dur,
+            }
+            ShowEntryFrame(e, annData)
+            if annTimers[id] then annTimers[id]:Cancel() end
             annTimers[id] = C_Timer.NewTimer(dur, function()
                 annTimers[id] = nil; HideEntryFrame(id)
             end)
@@ -245,7 +261,10 @@ end
 local BM_CB  = {}
 local bwReg  = false
 
-local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
+-- CallbackHandler prepends the handler object before the event name, so every
+-- callback receives (handler, event, arg1, arg2, ...) — the first two are ignored.
+
+local function OnBWTimer(_, _, addon, spellId, duration, _, text, count, icon)
     local now = GetTime()
     local d = { source="bw", spellId=tostring(spellId or ""), text=text or "",
         duration=duration or 0, expirationTime=now+(duration or 0),
@@ -254,7 +273,8 @@ local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
     HandleTimerStart(d)
 end
 
-local function OnBWStopBar(_, _, text)
+local function OnBWStopBar(_, _, _, text)
+    -- args after handler+event: addon, text
     bwBars[text or ""] = nil; HandleTimerStop(text or "")
 end
 
@@ -262,14 +282,15 @@ local function OnBWStopBars()
     for t in pairs(bwBars) do bwBars[t] = nil; HandleTimerStop(t) end
 end
 
-local function OnBWMessage(_, _, spellId, text, _, icon)
+local function OnBWMessage(_, _, _, spellId, text, _, icon)
+    -- args after handler+event: addon, spellId, text, type, icon
     local count = (text and (text:match("%((%d+)%)") or text:match("（(%d+)）"))) or "0"
     HandleAnnounce({ source="bw", spellId=tostring(spellId or ""),
         text=text or "", icon=icon, count=count })
 end
 
-local function OnBWSetStage(_, _, stage) bwStage = stage or 0 end
-local function OnBWWipe()                bwStage = 0 end
+local function OnBWSetStage(_, _, _, stage) bwStage = stage or 0 end
+local function OnBWWipe()                   bwStage = 0 end
 
 local function RegisterBW()
     if bwReg or not BigWigsLoader then return end
@@ -277,8 +298,12 @@ local function RegisterBW()
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_Timer",        OnBWTimer)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_CastTimer",    OnBWTimer)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_TargetTimer",  OnBWTimer)
-    BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StartPull", function(ev, ad, dur, _, txt, ic)
-        OnBWTimer(ev, ad, -2, dur, nil, txt or "Pull", 0, ic or 136116)
+    BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StartPull", function(_, _, addon, dur, _, txt, ic)
+        -- args after handler+event: addon, duration, _, text, icon
+        local now = GetTime(); dur = dur or 0
+        local d = { source="bw", spellId="-2", text=txt or "Pull",
+            duration=dur, expirationTime=now+dur, icon=ic or 136116, count="0" }
+        bwBars[txt or "Pull"] = d; HandleTimerStart(d)
     end)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBar",      OnBWStopBar)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBars",     OnBWStopBars)
@@ -706,6 +731,7 @@ function BossModModule:BuildUI(parent, db)
 
     local SelectEntry    -- forward-declared so all closures below capture the same upvalue
     local RefreshSidebar -- forward-declared
+    local RefreshPreview -- forward-declared
 
     local SB_W    = 200
     local ROW_H   = 24
@@ -859,11 +885,11 @@ function BossModModule:BuildUI(parent, db)
         local cbIcon = CreateFrame("CheckButton", nil, iconSec, "UICheckButtonTemplate")
         cbIcon:SetSize(24, 24); cbIcon:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y+3)
         local cbIconLbl = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbIconLbl:SetPoint("LEFT",cbIcon,"RIGHT",4,0); cbIconLbl:SetText("Enable icon")
-        cbIcon:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked() end end)
+        cbIcon:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
 
         Label(iconSec, 160, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 196, y+2, 44, true)
-        isizeEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; s:ClearFocus() end)
-        isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end end)
+        isizeEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; s:ClearFocus(); RefreshPreview() end)
+        isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
         y = y - 30
 
         Divider(iconSec, y); y = y - 14
@@ -873,12 +899,12 @@ function BossModModule:BuildUI(parent, db)
         local fontOpts = GetFontList()
         local fontDD = ScrollDrop(iconSec, 180, fontOpts,
             function() return ref.e and ref.e.fontName or fontOpts[1] end,
-            function(v) if ref.e then ref.e.fontName = v end end)
+            function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end)
         fontDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 40, y)
         Label(iconSec, 228, y-3, "Size:")
         local fsEB = MakeEB(iconSec, 260, y, 44, true)
-        fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus() end)
-        fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end end)
+        fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus(); RefreshPreview() end)
+        fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; RefreshPreview() end)
         y = y - 28
 
         Label(iconSec, 4, y-3, "Text color:")
@@ -887,21 +913,21 @@ function BossModModule:BuildUI(parent, db)
             function() return ref.e and ref.e.tcG or 1 end,
             function() return ref.e and ref.e.tcB or 1 end,
             function() return ref.e and ref.e.tcA or 1 end,
-            function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a end end)
+            function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a; RefreshPreview() end end)
         tcSwatch:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 82, y)
 
         Label(iconSec, 116, y-4, "Position:")
         local posOpts = {{label="Right",value="RIGHT"},{label="Left",value="LEFT"},{label="Top",value="TOP"},{label="Bottom",value="BOTTOM"}}
         local posDD = ScrollDrop(iconSec, 90, posOpts,
             function() return ref.e and ref.e.textPosition or "RIGHT" end,
-            function(v) if ref.e then ref.e.textPosition = v end end)
+            function(v) if ref.e then ref.e.textPosition = v; RefreshPreview() end end)
         posDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 172, y)
         y = y - 28
 
         Label(iconSec, 4, y-3, "Display text:")
         local dispEB = MakeEB(iconSec, 92, y, 300)
-        dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus() end)
-        dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end end)
+        dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
+        dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
         local dispHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         dispHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
         dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
@@ -928,7 +954,7 @@ function BossModModule:BuildUI(parent, db)
         local texOpts = GetTexList()
         local texDD = ScrollDrop(barSec, 180, texOpts,
             function() return ref.e and ref.e.barTexName or texOpts[1] end,
-            function(v) if ref.e then ref.e.barTexName = v end end)
+            function(v) if ref.e then ref.e.barTexName = v; RefreshPreview() end end)
         texDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 60, y)
         y = y - 28
 
@@ -938,23 +964,23 @@ function BossModModule:BuildUI(parent, db)
             function() return ref.e and ref.e.bcG or 0.8 end,
             function() return ref.e and ref.e.bcB or 0.2 end,
             function() return ref.e and ref.e.bcA or 1   end,
-            function(r,g,b,a) if ref.e then ref.e.bcR,ref.e.bcG,ref.e.bcB,ref.e.bcA=r,g,b,a end end)
+            function(r,g,b,a) if ref.e then ref.e.bcR,ref.e.bcG,ref.e.bcB,ref.e.bcA=r,g,b,a; RefreshPreview() end end)
         bcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", 68, y)
 
         Label(barSec, 100, y-3, "Width:")
         local bwEB = MakeEB(barSec, 138, y, 52, true)
-        bwEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end; s:ClearFocus() end)
-        bwEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end end)
+        bwEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end; s:ClearFocus(); RefreshPreview() end)
+        bwEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end; RefreshPreview() end)
         Label(barSec, 198, y-3, "Height:")
         local bhEB = MakeEB(barSec, 242, y, 44, true)
-        bhEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end; s:ClearFocus() end)
-        bhEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end end)
+        bhEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end; s:ClearFocus(); RefreshPreview() end)
+        bhEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end; RefreshPreview() end)
         y = y - 28
 
         local cbBI = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
         cbBI:SetSize(24, 24); cbBI:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y+3)
         local cbBIL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbBIL:SetPoint("LEFT",cbBI,"RIGHT",4,0); cbBIL:SetText("Enable icon")
-        cbBI:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked() end end)
+        cbBI:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
         y = y - 28
 
         Divider(barSec, y); y = y - 14
@@ -964,12 +990,12 @@ function BossModModule:BuildUI(parent, db)
         local bfOpts = GetFontList()
         local bfDD = ScrollDrop(barSec, 180, bfOpts,
             function() return ref.e and ref.e.barFontName or bfOpts[1] end,
-            function(v) if ref.e then ref.e.barFontName = v end end)
+            function(v) if ref.e then ref.e.barFontName = v; RefreshPreview() end end)
         bfDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 40, y)
         Label(barSec, 228, y-3, "Size:")
         local bfsEB = MakeEB(barSec, 260, y, 44, true)
-        bfsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end; s:ClearFocus() end)
-        bfsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end end)
+        bfsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end; s:ClearFocus(); RefreshPreview() end)
+        bfsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end; RefreshPreview() end)
         y = y - 28
 
         Label(barSec, 4, y-3, "Text color:")
@@ -978,21 +1004,21 @@ function BossModModule:BuildUI(parent, db)
             function() return ref.e and ref.e.btcG or 1 end,
             function() return ref.e and ref.e.btcB or 1 end,
             function() return ref.e and ref.e.btcA or 1 end,
-            function(r,g,b,a) if ref.e then ref.e.btcR,ref.e.btcG,ref.e.btcB,ref.e.btcA=r,g,b,a end end)
+            function(r,g,b,a) if ref.e then ref.e.btcR,ref.e.btcG,ref.e.btcB,ref.e.btcA=r,g,b,a; RefreshPreview() end end)
         btcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", 74, y)
 
         Label(barSec, 106, y-4, "Position:")
         local btpOpts = {{label="Center",value="CENTER"},{label="Left",value="LEFT"},{label="Right",value="RIGHT"}}
         local btpDD = ScrollDrop(barSec, 90, btpOpts,
             function() return ref.e and ref.e.barTextPos or "CENTER" end,
-            function(v) if ref.e then ref.e.barTextPos = v end end)
+            function(v) if ref.e then ref.e.barTextPos = v; RefreshPreview() end end)
         btpDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 162, y)
         y = y - 28
 
         Label(barSec, 4, y-3, "Display text:")
         local bDispEB = MakeEB(barSec, 92, y, 300)
-        bDispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus() end)
-        bDispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end end)
+        bDispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
+        bDispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
         local bDispHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         bDispHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
         bDispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count  |  %t = time left")
@@ -1019,14 +1045,14 @@ function BossModModule:BuildUI(parent, db)
         local gdOpts = {{label="Down",value="DOWN"},{label="Up",value="UP"},{label="Right",value="RIGHT"},{label="Left",value="LEFT"}}
         local gdDD = ScrollDrop(grpSec, 100, gdOpts,
             function() return ref.e and ref.e.growthDir or "DOWN" end,
-            function(v) if ref.e then ref.e.growthDir = v end end)
+            function(v) if ref.e then ref.e.growthDir = v; RefreshPreview() end end)
         gdDD:SetPoint("TOPLEFT", grpSec, "TOPLEFT", 124, y)
         y = y - 28
 
         Label(grpSec, 4, y-3, "Spacing:")
         local spEB = MakeEB(grpSec, 64, y, 44, true)
-        spEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end; s:ClearFocus() end)
-        spEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end end)
+        spEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end; s:ClearFocus(); RefreshPreview() end)
+        spEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end; RefreshPreview() end)
         y = y - 28
 
         Divider(grpSec, y); y = y - 14
@@ -1216,7 +1242,7 @@ function BossModModule:BuildUI(parent, db)
             tmrCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrCount = s:GetText() end; s:ClearFocus() end)
             tmrCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrCount = s:GetText() end end)
             ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Show when <=")
+            Label(tmrSec, 4, ty-3, "Show when less than: ")
             local tmrRem = MakeEB(tmrSec, 100, ty, 52)
             tmrRem:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end; s:ClearFocus() end)
             tmrRem:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end end)
@@ -1294,10 +1320,22 @@ function BossModModule:BuildUI(parent, db)
         local diffDD = ScrollDrop(loadCont, 180, diffs,
             function() return ref.e and ref.e.loadDiff or "" end,
             function(v) if ref.e then ref.e.loadDiff = v end end)
-        diffDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 72, y)
+        diffDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 72, y); y = y - 28
+
+        Label(loadCont, 4, y-4, "Role:")
+        local roles = {
+            {label="Any",    value=""},
+            {label="Tank",   value="TANK"},
+            {label="Healer", value="HEALER"},
+            {label="DPS",    value="DAMAGER"},
+        }
+        local roleDD = ScrollDrop(loadCont, 120, roles,
+            function() return ref.e and ref.e.loadRole or "" end,
+            function(v) if ref.e then ref.e.loadRole = v end end)
+        roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
 
         loadCont.Populate = function(e)
-            clsDD.Refresh(); encEB:SetText(e.loadEncId or ""); diffDD.Refresh()
+            clsDD.Refresh(); encEB:SetText(e.loadEncId or ""); diffDD.Refresh(); roleDD.Refresh()
         end
     end
 
@@ -1339,6 +1377,36 @@ function BossModModule:BuildUI(parent, db)
 
     local PREVIEW_DATA = { text="Preview Text", icon=134400, spellId="", count="0", duration=30 }
 
+    RefreshPreview = function()
+        if not previewId or not ref.e then return end
+        local e = ref.e
+        local prevDur = (e.triggerType == "announce")
+            and ((e.annDuration and e.annDuration > 0) and e.annDuration or 5)
+            or 30
+        PREVIEW_DATA.duration = prevDur
+        PREVIEW_DATA.expirationTime = GetTime() + prevDur
+        if e.type == "group" then
+            for _, cid in ipairs(e.children) do
+                local ce = AR.db.bossmods.entries[cid]
+                if ce then
+                    local cdur = (ce.triggerType == "announce")
+                        and ((ce.annDuration and ce.annDuration > 0) and ce.annDuration or 5)
+                        or 30
+                    PREVIEW_DATA.duration = cdur
+                    PREVIEW_DATA.expirationTime = GetTime() + cdur
+                    ShowEntryFrame(ce, PREVIEW_DATA)
+                    local cf = entryFrames[cid]
+                    if cf then cf:SetFrameStrata("FULLSCREEN") end
+                end
+            end
+            RefreshGroupLayout(e.id)
+        else
+            ShowEntryFrame(e, PREVIEW_DATA)
+            local pf = entryFrames[e.id]
+            if pf then pf:SetFrameStrata("FULLSCREEN") end
+        end
+    end
+
     SelectEntry = function(e)
         HidePreview()
         ref.e = e
@@ -1366,11 +1434,15 @@ function BossModModule:BuildUI(parent, db)
                 gf:SetFrameStrata("FULLSCREEN")
                 gf:EnableMouse(true)
                 gf:Show()
-                -- Preview all child entries
-                PREVIEW_DATA.expirationTime = GetTime() + 30
+                -- Preview all child entries (each uses its own trigger duration)
                 for _, cid in ipairs(e.children) do
                     local ce = AR.db.bossmods.entries[cid]
                     if ce then
+                        local cdur = (ce.triggerType == "announce")
+                            and ((ce.annDuration and ce.annDuration > 0) and ce.annDuration or 5)
+                            or 30
+                        PREVIEW_DATA.duration = cdur
+                        PREVIEW_DATA.expirationTime = GetTime() + cdur
                         ShowEntryFrame(ce, PREVIEW_DATA)
                         local cf = entryFrames[cid]
                         if cf then cf:SetFrameStrata("FULLSCREEN") end
@@ -1380,7 +1452,11 @@ function BossModModule:BuildUI(parent, db)
             previewId = e.id
         else
             -- Preview display frame — bump to FULLSCREEN so it draws above the DIALOG settings window
-            PREVIEW_DATA.expirationTime = GetTime() + 30
+            local prevDur = (e.triggerType == "announce")
+                and ((e.annDuration and e.annDuration > 0) and e.annDuration or 5)
+                or 30
+            PREVIEW_DATA.duration = prevDur
+            PREVIEW_DATA.expirationTime = GetTime() + prevDur
             ShowEntryFrame(e, PREVIEW_DATA)
             local pf = entryFrames[e.id]
             if pf and not e.groupId then
@@ -1400,9 +1476,15 @@ function BossModModule:BuildUI(parent, db)
             previewId = e.id
         end
 
-        trigCont.Populate(e)
-        loadCont.Populate(e)
-        PickSub(activeSub)
+        -- Groups have no trigger or load conditions — hide those tabs
+        local isGroup = e.type == "group"
+        subBtns[2]:SetShown(not isGroup)
+        subBtns[3]:SetShown(not isGroup)
+        if not isGroup then
+            trigCont.Populate(e)
+            loadCont.Populate(e)
+        end
+        PickSub(isGroup and 1 or activeSub)
     end
 
     -- =============================================
