@@ -388,6 +388,12 @@ local function MakeIconFrame(id)
     f.icon  = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
     f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    -- Live-update label when displayTmpl contains %t
+    f:SetScript("OnUpdate", function(self)
+        if not self.expTime or not self.displayTmpl or not self.displayTmpl:find("%%t") then return end
+        local rem = math.max(0, self.expTime - GetTime())
+        self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+    end)
     f:Hide(); return f
 end
 
@@ -398,7 +404,12 @@ local function LayoutIconFrame(f, e, data)
     f.label:SetFont(fp, fsz, "OUTLINE")
     f.label:SetTextColor(e.tcR, e.tcG, e.tcB, e.tcA)
     local rawText = (data.text and data.text ~= "") and data.text or (e.name or "")
-    f.label:SetText(FmtDisplay(e.displayText, rawText, data.count or "", 0))
+    f.displayTmpl = e.displayText or ""
+    f.lastMsg     = rawText
+    f.lastCount   = data.count or ""
+    f.expTime     = data.expirationTime
+    local initRem = data.expirationTime and math.max(0, data.expirationTime - GetTime()) or 0
+    f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
     local showIcon = e.iconEnabled and data.icon
     if showIcon then
@@ -476,8 +487,8 @@ local function LayoutBarFrame(f, e, data)
     if showIcon then
         f.icon:SetTexture(data.icon); f.icon:SetSize(isz, isz); f.icon:Show()
         f.icon:SetPoint("LEFT", f, "LEFT")
-        f.bar:SetPoint("LEFT", f.icon, "RIGHT", 2, 0)
-        f.bar:SetSize(bw - isz - 2, bh)
+        f.bar:SetPoint("LEFT", f.icon, "RIGHT", 0, 0)
+        f.bar:SetSize(bw - isz, bh)
     else
         f.icon:Hide()
         f.bar:SetPoint("LEFT", f, "LEFT"); f.bar:SetSize(bw, bh)
@@ -736,7 +747,7 @@ function BossModModule:BuildUI(parent, db)
     local RefreshSidebar -- forward-declared
     local RefreshPreview -- forward-declared
 
-    local SB_W    = 200
+    local SB_W    = 220
     local ROW_H   = 24
     local INDENT  = 14
 
@@ -1524,18 +1535,28 @@ function BossModModule:BuildUI(parent, db)
                 r:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
                 r.label = r:CreateFontString(nil,"OVERLAY","GameFontNormal")
                 r.label:SetPoint("LEFT",r,"LEFT",6,0); r.label:SetPoint("RIGHT",r,"RIGHT",-4,0); r.label:SetJustifyH("LEFT")
-                r:SetScript("OnEnter", function(s) if not ref.e or ref.e.id ~= s.eid then s:SetBackdropColor(0.1,0.1,0.18,1) end end)
-                r:SetScript("OnLeave", function(s) if not ref.e or ref.e.id ~= s.eid then s:SetBackdropColor(0.05,0.05,0.05,1) end end)
+                r:SetScript("OnEnter", function(s)
+                    if not ref.e or ref.e.id ~= s.eid then
+                        s:SetBackdropColor(s.isGroup and 0.14 or 0.1, s.isGroup and 0.14 or 0.1, 0.22, 1)
+                    end
+                end)
+                r:SetScript("OnLeave", function(s)
+                    if not ref.e or ref.e.id ~= s.eid then
+                        s:SetBackdropColor(s.isGroup and 0.10 or 0.05, s.isGroup and 0.10 or 0.05, s.isGroup and 0.10 or 0.05, 1)
+                    end
+                end)
                 rowPool[idx] = r
             end
             local r = rowPool[idx]
-            r.eid = e.id
+            r.eid    = e.id
+            r.isGroup = e.type == "group"
             local py = -(idx-1)*(ROW_H+2) - 2
             r:SetPoint("TOPLEFT",  scrollChild, "TOPLEFT",  indent, py)
             r:SetWidth(SB_W - 22 - indent)
             r:SetHeight(ROW_H)
-            local active = ref.e and ref.e.id == e.id
-            r:SetBackdropColor(active and 0.1 or 0.05, active and 0.22 or 0.05, active and 0.55 or 0.05, 1)
+            local active   = ref.e and ref.e.id == e.id
+            local idleBg   = r.isGroup and 0.10 or 0.05
+            r:SetBackdropColor(active and 0.1 or idleBg, active and 0.22 or idleBg, active and 0.55 or idleBg, 1)
             r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
             local pfx = (e.type=="group") and (groupExpanded[e.id] and "[-] " or "[+] ")
                       or (e.type=="bar" and "[=] " or "[T] ")
