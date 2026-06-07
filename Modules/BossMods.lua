@@ -41,6 +41,7 @@ local EDEFS = {
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
+    displayText  = "",           -- format template: %m=message %c=count %t=time(bars)
     barTexName   = nil,
     bcR=0.2, bcG=0.8, bcB=0.2, bcA=1,
     barWidth=220,  barHeight=22,
@@ -341,6 +342,19 @@ do
 end
 
 -- =============================================================================
+-- Display text formatter (%m=bossmod message, %c=count, %t=time remaining)
+-- =============================================================================
+
+local function FmtDisplay(tmpl, rawText, count, rem)
+    if not tmpl or tmpl == "" then return rawText end
+    local s = tmpl
+    s = s:gsub("%%t", ("%.1f"):format(math.max(0, rem or 0)))
+    s = s:gsub("%%c", tostring(count or ""))
+    s = s:gsub("%%m", tostring(rawText or ""))
+    return s
+end
+
+-- =============================================================================
 -- Display frames: Icon + Text
 -- =============================================================================
 
@@ -359,7 +373,8 @@ local function LayoutIconFrame(f, e, data)
     local fp  = GetFontPath(e.fontName or GetFontList()[1])
     f.label:SetFont(fp, fsz, "OUTLINE")
     f.label:SetTextColor(e.tcR, e.tcG, e.tcB, e.tcA)
-    f.label:SetText(data.text ~= "" and data.text or (e.name or ""))
+    local rawText = (data.text and data.text ~= "") and data.text or (e.name or "")
+    f.label:SetText(FmtDisplay(e.displayText, rawText, data.count or "", 0))
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
     local showIcon = e.iconEnabled and data.icon
     if showIcon then
@@ -392,14 +407,18 @@ local function MakeBarFrame(id)
     bg:SetAllPoints(sb); bg:SetColorTexture(0, 0, 0, 0.5); f.barBg = bg
     f.icon      = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-    f.label     = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    f.timeLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    -- Labels are children of sb so they render above the bar fill texture
+    f.label     = sb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    f.timeLabel = sb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f:SetScript("OnUpdate", function(self)
         if not self.expTime then return end
         local rem = self.expTime - GetTime()
         if rem <= 0 then self:Hide(); return end
         self.bar:SetValue(self.dur > 0 and rem/self.dur or 0)
         self.timeLabel:SetText(("%.1f"):format(rem))
+        if self.displayTmpl and self.displayTmpl ~= "" then
+            self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        end
     end)
     f:Hide(); return f
 end
@@ -416,8 +435,13 @@ local function LayoutBarFrame(f, e, data)
         fs:SetFont(fp, fsz, "OUTLINE")
         fs:SetTextColor(e.btcR, e.btcG, e.btcB, e.btcA)
     end
-    f.label:SetText(data.text ~= "" and data.text or (e.name or ""))
+    local rawText = (data.text and data.text ~= "") and data.text or (e.name or "")
+    f.displayTmpl = e.displayText or ""
+    f.lastMsg     = rawText
+    f.lastCount   = data.count or ""
     f.expTime = data.expirationTime; f.dur = data.duration or 0
+    local initRem = (data.expirationTime or GetTime()) - GetTime()
+    f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     local isz      = bh
     local showIcon = e.iconEnabled and data.icon
     f.bar:ClearAllPoints(); f.icon:ClearAllPoints()
@@ -443,7 +467,7 @@ end
 -- =============================================================================
 
 local function MakeGroupFrame(id)
-    local f = CreateFrame("Frame", "ARBossG" .. id, UIParent)
+    local f = CreateFrame("Frame", "ARBossG" .. id, UIParent, "BackdropTemplate")
     f:SetSize(1, 1); f:SetFrameStrata("HIGH"); f:SetClampedToScreen(true)
     f:SetMovable(true); f:EnableMouse(false); f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
@@ -455,6 +479,12 @@ local function MakeGroupFrame(id)
             if e then e.anchorX = math.floor(cx-ux+0.5); e.anchorY = math.floor(cy-uy+0.5) end
         end
     end)
+    -- Backdrop and label visible only during settings preview, invisible at runtime
+    f:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+    f:SetBackdropColor(0, 0, 0, 0); f:SetBackdropBorderColor(0, 0, 0, 0)
+    local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lbl:SetPoint("CENTER"); lbl:SetText("Group Anchor"); lbl:SetTextColor(0.8, 0.9, 1); lbl:Hide()
+    f.anchorLabel = lbl
     f:Hide(); return f
 end
 
@@ -866,6 +896,16 @@ function BossModModule:BuildUI(parent, db)
             function() return ref.e and ref.e.textPosition or "RIGHT" end,
             function(v) if ref.e then ref.e.textPosition = v end end)
         posDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 172, y)
+        y = y - 28
+
+        Label(iconSec, 4, y-3, "Display text:")
+        local dispEB = MakeEB(iconSec, 92, y, 300)
+        dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus() end)
+        dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end end)
+        local dispHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        dispHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
+        dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
+        dispHint:SetTextColor(0.5, 0.5, 0.5)
 
         -- populate for icon section
         iconSec.Populate = function(e)
@@ -875,6 +915,7 @@ function BossModModule:BuildUI(parent, db)
             fsEB:SetText(tostring(e.fontSize or 14))
             tcSwatch.Refresh()
             posDD.Refresh()
+            dispEB:SetText(e.displayText or "")
         end
     end
 
@@ -946,6 +987,16 @@ function BossModModule:BuildUI(parent, db)
             function() return ref.e and ref.e.barTextPos or "CENTER" end,
             function(v) if ref.e then ref.e.barTextPos = v end end)
         btpDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 162, y)
+        y = y - 28
+
+        Label(barSec, 4, y-3, "Display text:")
+        local bDispEB = MakeEB(barSec, 92, y, 300)
+        bDispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus() end)
+        bDispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end end)
+        local bDispHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        bDispHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
+        bDispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count  |  %t = time left")
+        bDispHint:SetTextColor(0.5, 0.5, 0.5)
 
         barSec.Populate = function(e)
             texDD.Refresh(); bcSwatch.Refresh()
@@ -955,6 +1006,7 @@ function BossModModule:BuildUI(parent, db)
             bfDD.Refresh()
             bfsEB:SetText(tostring(e.barFontSize or 12))
             btcSwatch.Refresh(); btpDD.Refresh()
+            bDispEB:SetText(e.displayText or "")
         end
     end
 
@@ -1085,12 +1137,12 @@ function BossModModule:BuildUI(parent, db)
         local y = -4
         Label(trigCont, 4, y, "Trigger Type", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
 
-        local rbAnn = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
-        rbAnn:SetSize(24, 24); rbAnn:SetPoint("TOPLEFT", trigCont, "TOPLEFT", 4, y+3)
-        local rbAnnL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbAnnL:SetPoint("LEFT",rbAnn,"RIGHT",2,0); rbAnnL:SetText("Announce (message)")
         local rbTmr = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
-        rbTmr:SetSize(24, 24); rbTmr:SetPoint("LEFT", rbAnnL, "RIGHT", 20, 0)
+        rbTmr:SetSize(24, 24); rbTmr:SetPoint("TOPLEFT", trigCont, "TOPLEFT", 4, y+3)
         local rbTmrL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbTmrL:SetPoint("LEFT",rbTmr,"RIGHT",2,0); rbTmrL:SetText("Timer (countdown bar)")
+        local rbAnn = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
+        rbAnn:SetSize(24, 24); rbAnn:SetPoint("LEFT", rbTmrL, "RIGHT", 20, 0)
+        local rbAnnL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbAnnL:SetPoint("LEFT",rbAnn,"RIGHT",2,0); rbAnnL:SetText("Announce (message)")
         y = y - 28
 
         Divider(trigCont, y); y = y - 10
@@ -1164,7 +1216,7 @@ function BossModModule:BuildUI(parent, db)
             tmrCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrCount = s:GetText() end; s:ClearFocus() end)
             tmrCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrCount = s:GetText() end end)
             ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Show when ≤")
+            Label(tmrSec, 4, ty-3, "Show when <=")
             local tmrRem = MakeEB(tmrSec, 100, ty, 52)
             tmrRem:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end; s:ClearFocus() end)
             tmrRem:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end end)
@@ -1258,13 +1310,27 @@ function BossModModule:BuildUI(parent, db)
 
     local function HidePreview()
         if previewId then
+            local pe = AR.db and AR.db.bossmods and AR.db.bossmods.entries[previewId]
             local pf = entryFrames[previewId]
             if pf then
-                pf:SetFrameStrata("HIGH")  -- restore from preview strata
+                pf:SetFrameStrata("HIGH")
                 pf:EnableMouse(false)
                 pf:SetMovable(false)
                 pf:SetScript("OnDragStart", nil)
                 pf:SetScript("OnDragStop", nil)
+                if pe and pe.type == "group" then
+                    -- Restore group anchor to invisible runtime state
+                    pf:SetSize(1, 1)
+                    pf:SetBackdropColor(0, 0, 0, 0)
+                    pf:SetBackdropBorderColor(0, 0, 0, 0)
+                    if pf.anchorLabel then pf.anchorLabel:Hide() end
+                    -- Hide child preview frames and clear group layout state
+                    for _, cid in ipairs(pe.children) do
+                        local cf = entryFrames[cid]
+                        if cf then cf:SetFrameStrata("HIGH"); cf:Hide() end
+                    end
+                    groupActiveKids[previewId] = nil
+                end
                 pf:Hide()
             end
             previewId = nil
@@ -1290,11 +1356,26 @@ function BossModModule:BuildUI(parent, db)
         if e.type == "bar"   then barSec.Populate(e) end
         if e.type == "group" then
             grpSec.Populate(e)
-            -- Preview group anchor frame — bump to FULLSCREEN so it draws above the DIALOG settings window
             local gf = GetFrame(e)
             if gf then
+                -- Make anchor box visible for preview (always show even with no children)
+                gf:SetSize(110, 26)
+                gf:SetBackdropColor(0.1, 0.4, 0.8, 0.35)
+                gf:SetBackdropBorderColor(0.4, 0.8, 1, 0.9)
+                if gf.anchorLabel then gf.anchorLabel:Show() end
                 gf:SetFrameStrata("FULLSCREEN")
-                gf:EnableMouse(true); gf:Show()
+                gf:EnableMouse(true)
+                gf:Show()
+                -- Preview all child entries
+                PREVIEW_DATA.expirationTime = GetTime() + 30
+                for _, cid in ipairs(e.children) do
+                    local ce = AR.db.bossmods.entries[cid]
+                    if ce then
+                        ShowEntryFrame(ce, PREVIEW_DATA)
+                        local cf = entryFrames[cid]
+                        if cf then cf:SetFrameStrata("FULLSCREEN") end
+                    end
+                end
             end
             previewId = e.id
         else
