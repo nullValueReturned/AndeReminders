@@ -145,6 +145,8 @@ local function GetStage() return BigWigsLoader and bwStage or dbmStage end
 local function Mtxt(hay, needle, op)
     if not needle or needle == "" then return true end
     if not hay    or hay    == "" then return false end
+    hay    = hay:lower()
+    needle = needle:lower()
     if op == "==" then return hay == needle end
     if op == "match" then
         local ok, res = pcall(string.match, hay, needle)
@@ -230,6 +232,9 @@ HandleTimerStart = function(data)
             activeBars[id] = data
             if rem > 0 and data.duration > rem then
                 if schedShows[id] then schedShows[id]:Cancel() end
+                -- Hide immediately: the new bar is above the threshold so the
+                -- entry should not be visible yet. schedShows will re-show it.
+                HideEntryFrame(id)
                 local delay = data.duration - rem
                 schedShows[id] = C_Timer.NewTimer(delay, function()
                     schedShows[id] = nil
@@ -244,12 +249,19 @@ end
 
 HandleTimerStop = function(key)
     local db = AR.db; if not db or not db.bossmods then return end
+    local now = GetTime()
     for id, e in pairs(db.bossmods.entries) do
         if e.triggerType == "timer" then
             local bar = activeBars[id]
             if bar and (bar.text == key or bar.timerId == key) then
-                activeBars[id] = nil
-                if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+                -- Only fully clear tracking if this stop event is for the bar
+                -- currently in activeBars (its expiry is imminent). If a newer
+                -- bar has already replaced it (far-future expiry), preserve
+                -- the new bar's tracking so the entry reappears at its threshold.
+                if bar.expirationTime <= now + 1 then
+                    activeBars[id] = nil
+                    if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+                end
                 HideEntryFrame(id)
             end
         end
