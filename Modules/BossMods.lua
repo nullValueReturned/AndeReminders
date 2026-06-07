@@ -775,6 +775,7 @@ function BossModModule:BuildUI(parent, db)
     local SelectEntry    -- forward-declared so all closures below capture the same upvalue
     local RefreshSidebar -- forward-declared
     local RefreshPreview -- forward-declared
+    local ShowCtxMenu    -- forward-declared
 
     local SB_W    = 220
     local ROW_H   = 24
@@ -910,6 +911,52 @@ function BossModModule:BuildUI(parent, db)
     -- Shared entry reference pointer
     -- =============================================
     local ref = {}  -- ref.e = current entry; all widget callbacks close over ref
+
+    -- =============================================
+    -- Context menu frames (created once, reused)
+    -- =============================================
+    local CTX_W, CTX_ITEM_H = 200, 22
+    local ctxBD = { bgFile="Interface/DialogFrame/UI-DialogBox-Background",
+        edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1,
+        tile=true, tileSize=32, insets={left=2,right=2,top=2,bottom=2} }
+
+    -- Transparent full-screen capture frame — closes menus on outside click
+    local ctxCapture = CreateFrame("Frame", nil, UIParent)
+    ctxCapture:SetAllPoints(UIParent); ctxCapture:EnableMouse(true)
+    ctxCapture:SetFrameStrata("FULLSCREEN"); ctxCapture:Hide()
+
+    local ctxMenu = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    ctxMenu:SetFrameStrata("FULLSCREEN_DIALOG"); ctxMenu:SetWidth(CTX_W)
+    ctxMenu:SetBackdrop(ctxBD)
+    ctxMenu:SetBackdropColor(0.08,0.08,0.08,0.97); ctxMenu:SetBackdropBorderColor(0.45,0.45,0.45,1)
+    ctxMenu:Hide()
+
+    local ctxSub = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    ctxSub:SetFrameStrata("FULLSCREEN_DIALOG"); ctxSub:SetWidth(CTX_W)
+    ctxSub:SetFrameLevel(ctxMenu:GetFrameLevel() + 1)
+    ctxSub:SetBackdrop(ctxBD)
+    ctxSub:SetBackdropColor(0.08,0.08,0.08,0.97); ctxSub:SetBackdropBorderColor(0.45,0.45,0.45,1)
+    ctxSub:Hide()
+    ctxSub:SetScript("OnLeave", function(self) self:Hide() end)
+
+    ctxCapture:SetScript("OnMouseDown", function()
+        ctxMenu:Hide(); ctxSub:Hide(); ctxCapture:Hide()
+    end)
+
+    -- Pre-build button pools
+    local function MakeMenuBtn(parent, i)
+        local btn = CreateFrame("Button", nil, parent)
+        btn:SetHeight(CTX_ITEM_H)
+        btn:SetPoint("TOPLEFT",  parent, "TOPLEFT",  2, -(i-1)*CTX_ITEM_H - 2)
+        btn:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -2, -(i-1)*CTX_ITEM_H - 2)
+        local hl = btn:CreateTexture(nil,"HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1,1,1,0.1)
+        local lbl = btn:CreateFontString(nil,"OVERLAY","GameFontNormal")
+        lbl:SetPoint("LEFT",btn,"LEFT",8,0); lbl:SetPoint("RIGHT",btn,"RIGHT",-8,0)
+        lbl:SetJustifyH("LEFT"); btn.lbl = lbl; btn:Hide()
+        return btn
+    end
+    local cmBtns = {}; for i=1,5  do cmBtns[i] = MakeMenuBtn(ctxMenu, i) end
+    local smBtns = {}; for i=1,20 do smBtns[i] = MakeMenuBtn(ctxSub,  i) end
 
     -- =============================================
     -- DISPLAY TAB
@@ -1561,6 +1608,7 @@ function BossModModule:BuildUI(parent, db)
             idx = idx + 1
             if not rowPool[idx] then
                 local r = CreateFrame("Button", nil, scrollChild, "BackdropTemplate")
+                r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
                 r:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
                 r.label = r:CreateFontString(nil,"OVERLAY","GameFontNormal")
                 r.label:SetPoint("LEFT",r,"LEFT",6,0); r.label:SetPoint("RIGHT",r,"RIGHT",-4,0); r.label:SetJustifyH("LEFT")
@@ -1592,12 +1640,15 @@ function BossModModule:BuildUI(parent, db)
             r.label:SetText(pfx .. (e.name or "?"))
             r:Show()
             if e.type == "group" then
-                r:SetScript("OnClick", function()
-                    groupExpanded[e.id] = not groupExpanded[e.id]
-                    SelectEntry(e); RefreshSidebar()
+                r:SetScript("OnClick", function(_, btn)
+                    if btn == "RightButton" then ShowCtxMenu(e)
+                    else groupExpanded[e.id] = not groupExpanded[e.id]; SelectEntry(e); RefreshSidebar() end
                 end)
             else
-                r:SetScript("OnClick", function() SelectEntry(e); RefreshSidebar() end)
+                r:SetScript("OnClick", function(_, btn)
+                    if btn == "RightButton" then ShowCtxMenu(e)
+                    else SelectEntry(e); RefreshSidebar() end
+                end)
             end
         end
 
@@ -1614,6 +1665,133 @@ function BossModModule:BuildUI(parent, db)
             end
         end
         scrollChild:SetHeight(math.max(1, idx * (ROW_H + 2) + 6))
+    end
+
+    -- =============================================
+    -- Context menu logic
+    -- =============================================
+
+    local function CloseCtx() ctxMenu:Hide(); ctxSub:Hide(); ctxCapture:Hide() end
+
+    ShowCtxMenu = function(e)
+        -- Reset all buttons
+        for _, b in ipairs(cmBtns) do b:Hide() end
+        for _, b in ipairs(smBtns) do b:Hide() end
+        ctxSub:Hide()
+
+        -- Helpers -------------------------------------------------------
+        local function doDelete()
+            CloseCtx()
+            if ref.e and ref.e.id == e.id then
+                HidePreview(); ref.e = nil; sp:Hide(); placeholder:Show()
+            end
+            DeleteEntry(e.id); RefreshSidebar()
+        end
+
+        local function doDuplicate()
+            CloseCtx()
+            local copy = NewEntry(e.type, nil)
+            local SKIP = { id=true, groupId=true, children=true }
+            for k, v in pairs(e) do if not SKIP[k] then copy[k] = v end end
+            copy.name    = (e.name or "Entry") .. " (copy)"
+            copy.children = {}; copy.groupId = nil
+            table.insert(db.bossmods.topLevel, 1, copy.id)
+            RefreshSidebar()
+        end
+
+        -- Build item list -----------------------------------------------
+        local defs = {}
+        if e.type == "group" then
+            defs[1] = { text = "Duplicate",              fn = doDuplicate }
+            defs[2] = { text = "Delete group + children", fn = doDelete }
+        else
+            defs[1] = { text = "Duplicate", fn = doDuplicate }
+
+            if e.groupId then
+                defs[2] = { text = "Remove from group", fn = function()
+                    CloseCtx()
+                    local pg = db.bossmods.entries[e.groupId]
+                    if pg then
+                        for i, cid in ipairs(pg.children) do
+                            if cid == e.id then table.remove(pg.children, i); break end
+                        end
+                    end
+                    e.groupId = nil
+                    table.insert(db.bossmods.topLevel, e.id)
+                    RefreshSidebar()
+                end }
+            else
+                local groups = {}
+                for gid, ge in pairs(db.bossmods.entries) do
+                    if ge.type == "group" then table.insert(groups, ge) end
+                end
+                table.sort(groups, function(a, b) return (a.name or "") < (b.name or "") end)
+                if #groups > 0 then
+                    defs[2] = { text = "Add to group  >", groups = groups }
+                end
+            end
+
+            defs[#defs + 1] = { text = "Delete", fn = doDelete }
+        end
+
+        -- Wire buttons --------------------------------------------------
+        for i, def in ipairs(defs) do
+            local btn = cmBtns[i]; btn.lbl:SetText(def.text); btn.lbl:SetTextColor(1,1,1)
+
+            if def.groups then
+                local rowIdx = i
+                btn:SetScript("OnEnter", function(self)
+                    self.lbl:SetTextColor(1,0.82,0)
+                    -- Rebuild submenu
+                    for _, b in ipairs(smBtns) do b:Hide() end
+                    local gs = def.groups
+                    for si = 1, math.min(#gs, #smBtns) do
+                        local sb = smBtns[si]; local ge = gs[si]
+                        sb.lbl:SetText(ge.name or "?"); sb.lbl:SetTextColor(1,1,1)
+                        local gid = ge.id
+                        sb:SetScript("OnEnter", function(s) s.lbl:SetTextColor(1,0.82,0) end)
+                        sb:SetScript("OnLeave", function(s) s.lbl:SetTextColor(1,1,1) end)
+                        sb:SetScript("OnClick", function()
+                            CloseCtx()
+                            for ti, tid in ipairs(db.bossmods.topLevel) do
+                                if tid == e.id then table.remove(db.bossmods.topLevel, ti); break end
+                            end
+                            e.groupId = gid
+                            local tg = db.bossmods.entries[gid]
+                            if tg then table.insert(tg.children, e.id) end
+                            RefreshSidebar()
+                        end)
+                        sb:Show()
+                    end
+                    ctxSub:SetHeight(math.min(#gs, #smBtns) * CTX_ITEM_H + 4)
+                    ctxSub:ClearAllPoints()
+                    ctxSub:SetPoint("TOPLEFT", ctxMenu, "TOPRIGHT", -1, -(rowIdx-1)*CTX_ITEM_H - 2)
+                    ctxSub:Show()
+                end)
+                btn:SetScript("OnLeave", function(self) self.lbl:SetTextColor(1,1,1) end)
+                btn:SetScript("OnClick", nil)
+            else
+                local fn = def.fn
+                btn:SetScript("OnEnter", function(self) self.lbl:SetTextColor(1,0.82,0); ctxSub:Hide() end)
+                btn:SetScript("OnLeave", function(self) self.lbl:SetTextColor(1,1,1) end)
+                btn:SetScript("OnClick", fn)
+            end
+            btn:Show()
+        end
+
+        -- Position at cursor --------------------------------------------
+        ctxMenu:SetHeight(#defs * CTX_ITEM_H + 4)
+        local cx, cy = GetCursorPosition()
+        local s  = UIParent:GetEffectiveScale()
+        local mx = cx / s; local my = cy / s
+        if mx + CTX_W > UIParent:GetWidth() then mx = mx - CTX_W end
+        ctxMenu:ClearAllPoints()
+        if my >= ctxMenu:GetHeight() then
+            ctxMenu:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", mx, my)
+        else
+            ctxMenu:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", mx, my)
+        end
+        ctxMenu:Show(); ctxCapture:Show()
     end
 
     -- =============================================
