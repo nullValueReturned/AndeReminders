@@ -85,6 +85,8 @@ local function NewEntry(etype, groupId)
     local id = db.nextId; db.nextId = id + 1
     local e = { id = id, type = etype, groupId = groupId }
     ApplyDefs(e)
+    -- Progress bars default to timer trigger; icon+text entries to announce
+    if etype == "bar" then e.triggerType = "timer" end
     db.entries[id] = e
     return e
 end
@@ -1601,6 +1603,59 @@ function BossModModule:BuildUI(parent, db)
     PickSub(1)
     RefreshSidebar()
     placeholder:Show()
+end
+
+-- =============================================================================
+-- Debug slash command  /arbm list | /arbm trigger
+-- =============================================================================
+
+SLASH_ARBOSSMODS1 = "/arbm"
+SlashCmdList["ARBOSSMODS"] = function(msg)
+    local db = AR.db
+    if not db or not db.bossmods then
+        print("|cFFFF4444[AR BossMods]|r DB not ready — open the settings once first.")
+        return
+    end
+    local bm = db.bossmods
+    msg = msg and msg:lower():gsub("^%s+", "") or ""
+
+    if msg == "list" then
+        local count = 0
+        for id, e in pairs(bm.entries) do
+            count = count + 1
+            print(string.format("|cFF00AAFF[AR BossMods]|r #%d  %-20s  type=%-5s  trigger=%s",
+                id, tostring(e.name), tostring(e.type), tostring(e.triggerType)))
+        end
+        if count == 0 then print("|cFF00AAFF[AR BossMods]|r No entries found.") end
+
+    elseif msg == "trigger" then
+        local d = { source="bw", spellId="0", text="TestBar",
+            duration=10, expirationTime=GetTime()+10, icon=134400, count="0" }
+        print("|cFF00AAFF[AR BossMods]|r Simulating 10s BigWigs timer (text='TestBar')...")
+        local matched = 0
+        for id, e in pairs(bm.entries) do
+            if MatchTmr(e, d) and PassesLoad(e) then
+                matched = matched + 1
+                print(string.format("|cFF00FF00[AR BossMods]|r  Matched #%d '%s' (type=%s)",
+                    id, tostring(e.name), tostring(e.type)))
+            elseif e.triggerType == "timer" then
+                -- explain why it didn't match
+                local why = PassesLoad(e) and "filter mismatch" or "load condition failed"
+                print(string.format("|cFFFF8800[AR BossMods]|r  #%d '%s' has triggerType=timer but skipped: %s",
+                    id, tostring(e.name), why))
+            end
+        end
+        if matched == 0 then
+            print("|cFFFF4444[AR BossMods]|r No entries matched. Use /arbm list to check trigger types.")
+        else
+            HandleTimerStart(d)
+            print(string.format("|cFF00FF00[AR BossMods]|r %d entry/entries should now be visible.", matched))
+        end
+
+    else
+        print("|cFF00AAFF[AR BossMods]|r  /arbm list    — show all entries and their trigger types")
+        print("|cFF00AAFF[AR BossMods]|r  /arbm trigger — fire a 10s test timer to verify matching")
+    end
 end
 
 -- =============================================================================
