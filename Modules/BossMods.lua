@@ -1245,12 +1245,11 @@ function BossModModule:BuildUI(parent, db)
             tmrOpDD:SetPoint("TOPLEFT", tmrSec, "TOPLEFT", 274, ty)
             ty = ty - 26
             Label(tmrSec, 4, ty-3, "Count (blank=any):")
-            local tmrCnt = MakeEB(tmrSec, 140, ty, 90)
-            -- reset to 60 if break stuff ^
+            local tmrCnt = MakeEB(tmrSec, 140, ty, 60)
             tmrCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrCount = s:GetText() end; s:ClearFocus() end)
             tmrCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrCount = s:GetText() end end)
             ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Show when less than: ")
+            Label(tmrSec, 4, ty-3, "Show when < ")
             local tmrRem = MakeEB(tmrSec, 100, ty, 52)
             tmrRem:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end; s:ClearFocus() end)
             tmrRem:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end end)
@@ -1537,7 +1536,7 @@ function BossModModule:BuildUI(parent, db)
             r:SetBackdropColor(active and 0.1 or 0.05, active and 0.22 or 0.05, active and 0.55 or 0.05, 1)
             r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
             local pfx = (e.type=="group") and (groupExpanded[e.id] and "[-] " or "[+] ")
-                      or (e.type=="bar" and "▬ " or "★ ")
+                      or (e.type=="bar" and "[=] " or "[T] ")
             r.label:SetText(pfx .. (e.name or "?"))
             r:Show()
             if e.type == "group" then
