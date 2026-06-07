@@ -44,7 +44,7 @@ local EDEFS = {
     displayText  = "",           -- format template: %m=message %c=count %t=time(bars)
     barTexName   = nil,
     bcR=0.2, bcG=0.8, bcB=0.2, bcA=1,
-    barWidth=220,  barHeight=22,
+    barWidth=220,  barHeight=22,  barHideTimer=false,
     barFontName  = nil,          barFontSize=12,
     btcR=1, btcG=1, btcB=1, btcA=1,
     barTextPos   = "CENTER",
@@ -261,10 +261,10 @@ end
 local BM_CB  = {}
 local bwReg  = false
 
--- CallbackHandler prepends the handler object before the event name, so every
--- callback receives (handler, event, arg1, arg2, ...) — the first two are ignored.
+-- BigWigsLoader.RegisterMessage fires (event, arg1, arg2, ...) with no handler
+-- prepended — event name is the first arg, BigWigs payload follows directly.
 
-local function OnBWTimer(_, _, addon, spellId, duration, _, text, count, icon)
+local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
     local now = GetTime()
     local d = { source="bw", spellId=tostring(spellId or ""), text=text or "",
         duration=duration or 0, expirationTime=now+(duration or 0),
@@ -273,8 +273,8 @@ local function OnBWTimer(_, _, addon, spellId, duration, _, text, count, icon)
     HandleTimerStart(d)
 end
 
-local function OnBWStopBar(_, _, _, text)
-    -- args after handler+event: addon, text
+local function OnBWStopBar(_, _, text)
+    -- event, addon, text
     bwBars[text or ""] = nil; HandleTimerStop(text or "")
 end
 
@@ -282,15 +282,15 @@ local function OnBWStopBars()
     for t in pairs(bwBars) do bwBars[t] = nil; HandleTimerStop(t) end
 end
 
-local function OnBWMessage(_, _, _, spellId, text, _, icon)
-    -- args after handler+event: addon, spellId, text, type, icon
+local function OnBWMessage(_, _, spellId, text, _, icon)
+    -- event, addon, spellId, text, type, icon
     local count = (text and (text:match("%((%d+)%)") or text:match("（(%d+)）"))) or "0"
     HandleAnnounce({ source="bw", spellId=tostring(spellId or ""),
         text=text or "", icon=icon, count=count })
 end
 
-local function OnBWSetStage(_, _, _, stage) bwStage = stage or 0 end
-local function OnBWWipe()                   bwStage = 0 end
+local function OnBWSetStage(_, _, stage) bwStage = stage or 0 end
+local function OnBWWipe()               bwStage = 0 end
 
 local function RegisterBW()
     if bwReg or not BigWigsLoader then return end
@@ -298,12 +298,9 @@ local function RegisterBW()
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_Timer",        OnBWTimer)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_CastTimer",    OnBWTimer)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_TargetTimer",  OnBWTimer)
-    BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StartPull", function(_, _, addon, dur, _, txt, ic)
-        -- args after handler+event: addon, duration, _, text, icon
-        local now = GetTime(); dur = dur or 0
-        local d = { source="bw", spellId="-2", text=txt or "Pull",
-            duration=dur, expirationTime=now+dur, icon=ic or 136116, count="0" }
-        bwBars[txt or "Pull"] = d; HandleTimerStart(d)
+    BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StartPull", function(ev, ad, dur, _, txt, ic)
+        -- event, addon, duration, _, text, icon
+        OnBWTimer(ev, ad, -2, dur, nil, txt or "Pull", 0, ic or 136116)
     end)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBar",      OnBWStopBar)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBars",     OnBWStopBars)
@@ -440,7 +437,9 @@ local function MakeBarFrame(id)
         local rem = self.expTime - GetTime()
         if rem <= 0 then self:Hide(); return end
         self.bar:SetValue(self.dur > 0 and rem/self.dur or 0)
-        self.timeLabel:SetText(("%.1f"):format(rem))
+        if not self.hideTimer then
+            self.timeLabel:SetText(("%.1f"):format(rem))
+        end
         if self.displayTmpl and self.displayTmpl ~= "" then
             self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
         end
@@ -464,6 +463,8 @@ local function LayoutBarFrame(f, e, data)
     f.displayTmpl = e.displayText or ""
     f.lastMsg     = rawText
     f.lastCount   = data.count or ""
+    f.hideTimer   = e.barHideTimer or false
+    f.timeLabel:SetShown(not f.hideTimer)
     f.expTime = data.expirationTime; f.dur = data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
@@ -981,6 +982,11 @@ function BossModModule:BuildUI(parent, db)
         cbBI:SetSize(24, 24); cbBI:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y+3)
         local cbBIL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbBIL:SetPoint("LEFT",cbBI,"RIGHT",4,0); cbBIL:SetText("Enable icon")
         cbBI:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
+
+        local cbHT = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
+        cbHT:SetSize(24, 24); cbHT:SetPoint("LEFT", cbBIL, "RIGHT", 24, 0)
+        local cbHTL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbHTL:SetPoint("LEFT",cbHT,"RIGHT",4,0); cbHTL:SetText("Hide timer text")
+        cbHT:SetScript("OnClick", function(s) if ref.e then ref.e.barHideTimer = s:GetChecked(); RefreshPreview() end end)
         y = y - 28
 
         Divider(barSec, y); y = y - 14
@@ -1029,6 +1035,7 @@ function BossModModule:BuildUI(parent, db)
             bwEB:SetText(tostring(e.barWidth or 220))
             bhEB:SetText(tostring(e.barHeight or 22))
             cbBI:SetChecked(e.iconEnabled)
+            cbHT:SetChecked(e.barHideTimer or false)
             bfDD.Refresh()
             bfsEB:SetText(tostring(e.barFontSize or 12))
             btcSwatch.Refresh(); btpDD.Refresh()
@@ -1238,7 +1245,8 @@ function BossModModule:BuildUI(parent, db)
             tmrOpDD:SetPoint("TOPLEFT", tmrSec, "TOPLEFT", 274, ty)
             ty = ty - 26
             Label(tmrSec, 4, ty-3, "Count (blank=any):")
-            local tmrCnt = MakeEB(tmrSec, 140, ty, 60)
+            local tmrCnt = MakeEB(tmrSec, 140, ty, 90)
+            -- reset to 60 if break stuff ^
             tmrCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrCount = s:GetText() end; s:ClearFocus() end)
             tmrCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrCount = s:GetText() end end)
             ty = ty - 26
@@ -1433,6 +1441,17 @@ function BossModModule:BuildUI(parent, db)
                 if gf.anchorLabel then gf.anchorLabel:Show() end
                 gf:SetFrameStrata("FULLSCREEN")
                 gf:EnableMouse(true)
+                gf:SetMovable(true)
+                gf:RegisterForDrag("LeftButton")
+                gf:SetScript("OnDragStart", gf.StartMoving)
+                gf:SetScript("OnDragStop", function(self)
+                    self:StopMovingOrSizing()
+                    local cx, cy = self:GetCenter(); local ux, uy = UIParent:GetCenter()
+                    if cx and ux then
+                        e.anchorX = math.floor(cx - ux + 0.5)
+                        e.anchorY = math.floor(cy - uy + 0.5)
+                    end
+                end)
                 gf:Show()
                 -- Preview all child entries (each uses its own trigger duration)
                 for _, cid in ipairs(e.children) do
