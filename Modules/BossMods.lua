@@ -369,7 +369,24 @@ do
     ef:RegisterEvent("ADDON_LOADED")
     ef:SetScript("OnEvent", function(_, ev, a1)
         if     ev == "ENCOUNTER_START" then currentEncId = a1
-        elseif ev == "ENCOUNTER_END"   then currentEncId = 0
+        elseif ev == "ENCOUNTER_END" then
+            currentEncId = 0
+            -- Cancel pending announce timers and hide any entries still on screen
+            for id, t in pairs(annTimers) do
+                if t then t:Cancel() end
+                annTimers[id] = nil
+                HideEntryFrame(id)
+            end
+            -- Cancel pending threshold-delayed shows for timer entries
+            for id, t in pairs(schedShows) do
+                if t then t:Cancel() end
+                schedShows[id] = nil
+            end
+            -- Hide any timer entries still showing and clear active bar state
+            for id in pairs(activeBars) do HideEntryFrame(id) end
+            wipe(activeBars)
+            wipe(bwBars)
+            wipe(dbmBars)
         elseif ev == "ADDON_LOADED" then
             if a1 == "BigWigsLoader" then RegisterBW()  end
             if a1 == "DBM-Core"      then RegisterDBM() end
