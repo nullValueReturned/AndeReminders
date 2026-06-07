@@ -270,6 +270,8 @@ local function BuildFontDropdown(parent, db, anchorTo)
     local dropBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     dropBtn:SetSize(POPUP_WIDTH, 22)
     dropBtn:SetPoint("LEFT", anchorTo, "RIGHT", 6, 0)
+    local bfs = dropBtn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",dropBtn,"LEFT",8,0); bfs:SetPoint("RIGHT",dropBtn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
+    local arrowFs = dropBtn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",dropBtn,"RIGHT",-5,0); arrowFs:SetText("▼")
     dropBtn:SetText(fontNames[fontIndex])
 
     local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
@@ -319,6 +321,7 @@ local function BuildFontDropdown(parent, db, anchorTo)
         lbl:SetPoint("RIGHT", btn, "RIGHT", -2, 0)
         lbl:SetJustifyH("LEFT")
         lbl:SetText(name)
+        lbl:SetFont(ResolveFontPath(name), 12, "")
 
         btn:SetScript("OnClick", function()
             if itemBtns[fontIndex] then itemBtns[fontIndex].selTex:Hide() end

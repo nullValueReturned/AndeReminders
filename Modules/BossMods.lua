@@ -674,7 +674,7 @@ local function Swatch(parent, getR, getG, getB, getA, setColor)
 end
 
 -- Compact scrollable dropdown. opts = array of strings or {label,value} tables.
-local function ScrollDrop(parent, w, opts, getter, setter)
+local function ScrollDrop(parent, w, opts, getter, setter, kind)
     -- Snapshot opts: LSM:List() returns its internal mutable array; if other addons
     -- register fonts after this dropdown is built, opts would grow but selTex wouldn't.
     local snap = {}; for i = 1, #opts do snap[i] = opts[i] end; opts = snap
@@ -688,6 +688,8 @@ local function ScrollDrop(parent, w, opts, getter, setter)
 
     local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     btn:SetSize(w, 22)
+    local bfs = btn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",btn,"LEFT",8,0); bfs:SetPoint("RIGHT",btn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
+    local arrowFs = btn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",btn,"RIGHT",-5,0); arrowFs:SetText("▼")
 
     local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
     popup:SetSize(w, visH + 4)
@@ -721,9 +723,13 @@ local function ScrollDrop(parent, w, opts, getter, setter)
         row:SetHeight(ITEM_H)
         row:SetPoint("TOPLEFT",  ct, "TOPLEFT",  0, -(i-1)*ITEM_H)
         row:SetPoint("TOPRIGHT", ct, "TOPRIGHT", 0, -(i-1)*ITEM_H)
+        if kind == "texture" then
+            local bg = row:CreateTexture(nil, "BACKGROUND"); bg:SetDrawLayer("BACKGROUND", -1); bg:SetAllPoints(); bg:SetTexture(GetTexPath(Val(o))); bg:SetVertexColor(0.55, 0.55, 0.55, 1)
+        end
         local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1,1,1,0.1)
         local st = row:CreateTexture(nil, "BACKGROUND"); st:SetAllPoints(); st:SetColorTexture(0.2,0.4,0.8,0.25); selTex[i] = st
         local lbl = row:CreateFontString(nil,"OVERLAY","GameFontNormal"); lbl:SetPoint("LEFT",row,"LEFT",6,0); lbl:SetJustifyH("LEFT"); lbl:SetText(Label(o))
+        if kind == "font" then lbl:SetFont(GetFontPath(Val(o)), 12, "") end
         local val = Val(o)
         row:SetScript("OnClick", function() setter(val); popup:Hide(); Refresh() end)
     end
@@ -989,7 +995,7 @@ function BossModModule:BuildUI(parent, db)
         local fontOpts = GetFontList()
         local fontDD = ScrollDrop(iconSec, 180, fontOpts,
             function() return ref.e and ref.e.fontName or fontOpts[1] end,
-            function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end)
+            function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end, "font")
         fontDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 40, y)
         Label(iconSec, 228, y-3, "Size:")
         local fsEB = MakeEB(iconSec, 260, y, 44, true)
@@ -1044,7 +1050,7 @@ function BossModModule:BuildUI(parent, db)
         local texOpts = GetTexList()
         local texDD = ScrollDrop(barSec, 180, texOpts,
             function() return ref.e and ref.e.barTexName or texOpts[1] end,
-            function(v) if ref.e then ref.e.barTexName = v; RefreshPreview() end end)
+            function(v) if ref.e then ref.e.barTexName = v; RefreshPreview() end end, "texture")
         texDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 60, y)
         y = y - 28
 
@@ -1085,7 +1091,7 @@ function BossModModule:BuildUI(parent, db)
         local bfOpts = GetFontList()
         local bfDD = ScrollDrop(barSec, 180, bfOpts,
             function() return ref.e and ref.e.barFontName or bfOpts[1] end,
-            function(v) if ref.e then ref.e.barFontName = v; RefreshPreview() end end)
+            function(v) if ref.e then ref.e.barFontName = v; RefreshPreview() end end, "font")
         bfDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 40, y)
         Label(barSec, 228, y-3, "Size:")
         local bfsEB = MakeEB(barSec, 260, y, 44, true)
