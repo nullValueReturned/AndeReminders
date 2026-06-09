@@ -30,6 +30,10 @@ local function GetTexPath(n)
     if LSM then return LSM:Fetch("statusbar", n) or "Interface\\TargetingFrame\\UI-StatusBar" end
     return BTEX_PATHS[n] or "Interface\\TargetingFrame\\UI-StatusBar"
 end
+local function GetSoundList() return LSM and LSM:List("sound") or {} end
+local function GetSoundPath(n) return LSM and LSM:Fetch("sound", n) end
+
+local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
 -- =============================================================================
 -- Entry defaults
@@ -121,6 +125,7 @@ end
 
 local HandleAnnounce, HandleTimerStart, HandleTimerStop
 local ShowEntryFrame, HideEntryFrame, RefreshGroupLayout
+local FireConditionAction
 
 -- =============================================================================
 -- Runtime state
@@ -135,6 +140,8 @@ local activeBars        = {}  -- [entryId] = barData
 local annTimers         = {}  -- [entryId] = C_Timer handle
 local schedShows        = {}  -- [entryId] = C_Timer handle
 local groupActiveKids   = {}  -- [groupId] = ordered list of visible child ids
+local condFired         = {}  -- [entryId] = { [condIdx] = true }  reset on ShowEntryFrame
+local condCleanup       = {}  -- [entryId] = list of cleanup fns    called on HideEntryFrame
 
 local function GetStage() return BigWigsLoader and bwStage or dbmStage end
 
@@ -419,9 +426,24 @@ local function MakeIconFrame(id)
     f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     -- Live-update label when displayTmpl contains %t
     f:SetScript("OnUpdate", function(self)
-        if not self.expTime or not self.displayTmpl or not self.displayTmpl:find("%%t") then return end
+        if not self.expTime then return end
         local rem = math.max(0, self.expTime - GetTime())
-        self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        if self.displayTmpl and self.displayTmpl:find("%%t") then
+            self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        end
+        local e = AR.db and AR.db.bossmods and AR.db.bossmods.entries[id]
+        if e and e.conditions then
+            if not condFired[id] then condFired[id] = {} end
+            for ci, cond in ipairs(e.conditions) do
+                if cond.trigger == "time" and not condFired[id][ci] then
+                    local tval = cond.timeVal or 0
+                    local met  = (cond.timeOp == "eq" and math.abs(rem - tval) < 0.15)
+                              or (cond.timeOp == "lt" and rem < tval)
+                              or (cond.timeOp == "gt" and rem > tval)
+                    if met then condFired[id][ci] = true; FireConditionAction(id, cond) end
+                end
+            end
+        end
     end)
     f:Hide(); return f
 end
@@ -477,6 +499,20 @@ local function MakeBarFrame(id)
     f:SetScript("OnUpdate", function(self)
         if not self.expTime then return end
         local rem = self.expTime - GetTime()
+        local e = AR.db and AR.db.bossmods and AR.db.bossmods.entries[id]
+        if e and e.conditions then
+            local rclamp = math.max(0, rem)
+            if not condFired[id] then condFired[id] = {} end
+            for ci, cond in ipairs(e.conditions) do
+                if cond.trigger == "time" and not condFired[id][ci] then
+                    local tval = cond.timeVal or 0
+                    local met  = (cond.timeOp == "eq" and math.abs(rclamp - tval) < 0.15)
+                              or (cond.timeOp == "lt" and rclamp < tval)
+                              or (cond.timeOp == "gt" and rclamp > tval)
+                    if met then condFired[id][ci] = true; FireConditionAction(id, cond) end
+                end
+            end
+        end
         if rem <= 0 then self:Hide(); return end
         self.bar:SetValue(self.dur > 0 and rem/self.dur or 0)
         if not self.hideTimer then
@@ -586,6 +622,61 @@ RefreshGroupLayout = function(gid)
 end
 
 -- =============================================================================
+-- Condition action executor
+-- =============================================================================
+
+FireConditionAction = function(entryId, cond)
+    local f = entryFrames[entryId]; if not f then return end
+    local action = cond.action or "glow"
+
+    if action == "glow" then
+        if LCG then
+            local key = "arcond" .. entryId
+            local gt  = cond.glowType or "pixel"
+            if     gt == "pixel"    then LCG.PixelGlow_Start(f, nil, nil, nil, nil, nil, 0, 0, false, key)
+            elseif gt == "proc"     then LCG.ProcGlow_Start(f, {}, key)
+            elseif gt == "autocast" then LCG.AutoCastGlow_Start(f, nil, nil, nil, nil, 0, 0, key)
+            end
+            if not condCleanup[entryId] then condCleanup[entryId] = {} end
+            local gt2 = gt
+            table.insert(condCleanup[entryId], function()
+                if not LCG then return end
+                if     gt2 == "pixel"    then LCG.PixelGlow_Stop(f, key)
+                elseif gt2 == "proc"     then LCG.ProcGlow_Stop(f, key)
+                elseif gt2 == "autocast" then LCG.AutoCastGlow_Stop(f, key)
+                end
+            end)
+        end
+
+    elseif action == "sound" then
+        local path = GetSoundPath(cond.soundName or "")
+        if path then PlaySoundFile(path, "Master") end
+
+    elseif action == "scale" then
+        f:SetScale(cond.scaleVal or 1.5)
+        if not condCleanup[entryId] then condCleanup[entryId] = {} end
+        table.insert(condCleanup[entryId], function() f:SetScale(1.0) end)
+
+    elseif action == "barColor" then
+        if f.bar then
+            f.bar:SetStatusBarColor(cond.bcR or 1, cond.bcG or 0, cond.bcB or 0, cond.bcA or 1)
+        end
+
+    elseif action == "fontColor" then
+        if f.label     then f.label:SetTextColor(    cond.fcR or 1, cond.fcG or 1, cond.fcB or 0, cond.fcA or 1) end
+        if f.timeLabel then f.timeLabel:SetTextColor(cond.fcR or 1, cond.fcG or 1, cond.fcB or 0, cond.fcA or 1) end
+
+    elseif action == "flash" then
+        local count = 0
+        C_Timer.NewTicker(0.1, function(ticker)
+            count = count + 1
+            if f:IsShown() then f:SetAlpha(count % 2 == 0 and 1.0 or 0.15) end
+            if count >= 8 then ticker:Cancel(); if f:IsShown() then f:SetAlpha(1.0) end end
+        end)
+    end
+end
+
+-- =============================================================================
 -- GetFrame / ShowEntryFrame / HideEntryFrame
 -- =============================================================================
 
@@ -635,9 +726,36 @@ ShowEntryFrame = function(e, data)
         f:SetPoint("CENTER", UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
         f:Show()
     end
+    -- Reset per-activation state then fire "show" conditions
+    condFired[e.id]   = {}
+    condCleanup[e.id] = {}
+    if e.conditions then
+        for ci, cond in ipairs(e.conditions) do
+            if cond.trigger == "show" then
+                condFired[e.id][ci] = true
+                FireConditionAction(e.id, cond)
+            end
+        end
+    end
 end
 
 HideEntryFrame = function(id)
+    -- Fire "hide" conditions before hiding
+    local hdb = AR.db
+    if hdb and hdb.bossmods then
+        local he = hdb.bossmods.entries[id]
+        if he and he.conditions then
+            for _, cond in ipairs(he.conditions) do
+                if cond.trigger == "hide" then FireConditionAction(id, cond) end
+            end
+        end
+    end
+    -- Run cleanup (stop glows, reset scale)
+    if condCleanup[id] then
+        for _, fn in ipairs(condCleanup[id]) do fn() end
+        condCleanup[id] = nil
+    end
+    condFired[id] = nil
     local f = entryFrames[id]; if f then f:Hide() end
     RemoveFromGroup(id)
 end
@@ -878,14 +996,14 @@ function BossModModule:BuildUI(parent, db)
     local delBtn = CreateFrame("Button", nil, sp, "UIPanelButtonTemplate")
     delBtn:SetSize(64, 20); delBtn:SetPoint("LEFT", nameEB, "RIGHT", 8, 0); delBtn:SetText("Delete")
 
-    -- Sub-tabs: Display | Trigger | Load
-    local SUB_NAMES = { "Display", "Trigger", "Load" }
+    -- Sub-tabs: Display | Trigger | Load | Conditions
+    local SUB_NAMES = { "Display", "Trigger", "Load", "Conditions" }
     local subBtns, subConts = {}, {}
     local activeSub = 1
 
     local function PickSub(idx)
         activeSub = idx
-        for i = 1, 3 do
+        for i = 1, #subBtns do
             subConts[i]:SetShown(i == idx)
             subBtns[i]:SetBackdropColor(i==idx and 0.12 or 0.05, i==idx and 0.26 or 0.05, i==idx and 0.6 or 0.05, 1)
         end
@@ -912,6 +1030,7 @@ function BossModModule:BuildUI(parent, db)
     local displayCont = subConts[1]
     local trigCont    = subConts[2]
     local loadCont    = subConts[3]
+    local condCont    = subConts[4]
 
     -- =============================================
     -- Shared entry reference pointer
@@ -1442,6 +1561,187 @@ function BossModModule:BuildUI(parent, db)
     end
 
     -- =============================================
+    -- CONDITIONS TAB
+    -- =============================================
+    do
+        local RULE_H   = 62
+        local RULE_GAP = 4
+
+        local addRuleBtn = CreateFrame("Button", nil, condCont, "UIPanelButtonTemplate")
+        addRuleBtn:SetSize(100, 22)
+        addRuleBtn:SetPoint("TOPLEFT", condCont, "TOPLEFT", 4, -4)
+        addRuleBtn:SetText("+ Add rule")
+
+        local rulesScroll = CreateFrame("ScrollFrame", nil, condCont, "UIPanelScrollFrameTemplate")
+        rulesScroll:SetPoint("TOPLEFT",     addRuleBtn, "BOTTOMLEFT",  0, -4)
+        rulesScroll:SetPoint("BOTTOMRIGHT", condCont,   "BOTTOMRIGHT", -20, 4)
+
+        local rulesChild = CreateFrame("Frame", nil, rulesScroll)
+        rulesChild:SetHeight(1)
+        rulesScroll:SetScrollChild(rulesChild)
+
+        local TRIG_OPTS = {
+            { label="On show",        value="show" },
+            { label="On hide",        value="hide" },
+            { label="Remaining time", value="time" },
+        }
+        local ACT_OPTS = {
+            { label="Glow",       value="glow"      },
+            { label="Play sound", value="sound"     },
+            { label="Scale",      value="scale"     },
+            { label="Bar color",  value="barColor"  },
+            { label="Font color", value="fontColor" },
+            { label="Flash",      value="flash"     },
+        }
+        local GLOW_OPTS = {
+            { label="Pixel",     value="pixel"    },
+            { label="Proc",      value="proc"     },
+            { label="Auto-cast", value="autocast" },
+        }
+        local TIME_OP_OPTS = {
+            { label="less than",    value="lt" },
+            { label="equals",       value="eq" },
+            { label="greater than", value="gt" },
+        }
+
+        local RebuildRules  -- forward-declare for use in rule row closures
+
+        local function MakeRuleRow(parent, cond, onRemove, rw)
+            local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+            row:SetSize(rw, RULE_H)
+            row:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+            row:SetBackdropColor(0.08, 0.08, 0.08, 1)
+            row:SetBackdropBorderColor(0.22, 0.22, 0.22, 1)
+
+            -- Forward-declare UpdateVis so setter closures below can capture it
+            local UpdateVis
+
+            -- ---- IF row ----
+            local ifLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            ifLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -8)
+            ifLbl:SetText("IF"); ifLbl:SetTextColor(0.8, 0.8, 0.5)
+
+            local trigDD = ScrollDrop(row, 130, TRIG_OPTS,
+                function() return cond.trigger or "show" end,
+                function(v) cond.trigger = v; UpdateVis() end)
+            trigDD:SetPoint("TOPLEFT", row, "TOPLEFT", 36, -4)
+
+            local timeOpDD = ScrollDrop(row, 104, TIME_OP_OPTS,
+                function() return cond.timeOp or "lt" end,
+                function(v) cond.timeOp = v end)
+            timeOpDD:SetPoint("TOPLEFT", row, "TOPLEFT", 174, -4)
+
+            local timeValEB = MakeEB(row, 284, -4, 50, true)
+            timeValEB:SetText(tostring(cond.timeVal or 5))
+            timeValEB:SetScript("OnEnterPressed",  function(s) cond.timeVal = tonumber(s:GetText()) or 5; s:ClearFocus() end)
+            timeValEB:SetScript("OnEditFocusLost", function(s) cond.timeVal = tonumber(s:GetText()) or 5 end)
+
+            local sLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            sLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 340, -8); sLbl:SetText("s")
+
+            -- ---- THEN row ----
+            local thenLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            thenLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -36)
+            thenLbl:SetText("THEN"); thenLbl:SetTextColor(0.8, 0.8, 0.5)
+
+            local actDD = ScrollDrop(row, 130, ACT_OPTS,
+                function() return cond.action or "glow" end,
+                function(v) cond.action = v; UpdateVis() end)
+            actDD:SetPoint("TOPLEFT", row, "TOPLEFT", 50, -32)
+
+            local glowDD = ScrollDrop(row, 100, GLOW_OPTS,
+                function() return cond.glowType or "pixel" end,
+                function(v) cond.glowType = v end)
+            glowDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
+
+            local soundList = GetSoundList()
+            local soundDD
+            if #soundList > 0 then
+                soundDD = ScrollDrop(row, 180, soundList,
+                    function() return cond.soundName or soundList[1] end,
+                    function(v) cond.soundName = v end)
+                soundDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
+            else
+                local noSndLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                noSndLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -36)
+                noSndLbl:SetText("(no LSM sounds)"); noSndLbl:SetTextColor(0.5, 0.5, 0.5)
+                soundDD = { SetShown = function(self, v) if v then noSndLbl:Show() else noSndLbl:Hide() end end }
+            end
+
+            local scaleEB = MakeEB(row, 188, -32, 54, false)
+            scaleEB:SetText(tostring(cond.scaleVal or 1.5))
+            scaleEB:SetScript("OnEnterPressed",  function(s) cond.scaleVal = tonumber(s:GetText()) or 1.5; s:ClearFocus() end)
+            scaleEB:SetScript("OnEditFocusLost", function(s) cond.scaleVal = tonumber(s:GetText()) or 1.5 end)
+            local scaleLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            scaleLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 248, -36); scaleLbl:SetText("x scale")
+
+            local bcSwatch = Swatch(row,
+                function() return cond.bcR or 1 end, function() return cond.bcG or 0 end,
+                function() return cond.bcB or 0 end, function() return cond.bcA or 1 end,
+                function(r,g,b,a) cond.bcR,cond.bcG,cond.bcB,cond.bcA = r,g,b,a end)
+            bcSwatch:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -31)
+
+            local fcSwatch = Swatch(row,
+                function() return cond.fcR or 1 end, function() return cond.fcG or 1 end,
+                function() return cond.fcB or 0 end, function() return cond.fcA or 1 end,
+                function(r,g,b,a) cond.fcR,cond.fcG,cond.fcB,cond.fcA = r,g,b,a end)
+            fcSwatch:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -31)
+
+            -- ---- Remove button ----
+            local rmBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            rmBtn:SetSize(58, 20); rmBtn:SetText("Remove")
+            rmBtn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, -4)
+            rmBtn:SetScript("OnClick", onRemove)
+
+            -- ---- Visibility (defined after all widgets so closures above work) ----
+            UpdateVis = function()
+                local isTime = (cond.trigger or "show") == "time"
+                timeOpDD:SetShown(isTime); timeValEB:SetShown(isTime); sLbl:SetShown(isTime)
+                local act = cond.action or "glow"
+                glowDD:SetShown(act == "glow")
+                soundDD:SetShown(act == "sound")
+                scaleEB:SetShown(act == "scale"); scaleLbl:SetShown(act == "scale")
+                bcSwatch:SetShown(act == "barColor")
+                fcSwatch:SetShown(act == "fontColor")
+            end
+            UpdateVis()
+
+            return row
+        end
+
+        RebuildRules = function(e)
+            for _, c in ipairs({ rulesChild:GetChildren() }) do c:Hide() end
+            if not e or not e.conditions or #e.conditions == 0 then
+                rulesChild:SetHeight(1); return
+            end
+            local rw = math.max(200, condCont:GetWidth() - 24)
+            rulesChild:SetWidth(rw)
+            for ri, cond in ipairs(e.conditions) do
+                local ci = ri
+                local row = MakeRuleRow(rulesChild, cond, function()
+                    table.remove(e.conditions, ci)
+                    RebuildRules(e)
+                end, rw)
+                row:SetPoint("TOPLEFT", rulesChild, "TOPLEFT", 0, -(ri-1)*(RULE_H+RULE_GAP))
+                row:Show()
+            end
+            rulesChild:SetHeight(#e.conditions * (RULE_H + RULE_GAP))
+        end
+
+        condCont.Populate = function(e)
+            if not e.conditions then e.conditions = {} end
+            RebuildRules(e)
+        end
+
+        addRuleBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            if not ref.e.conditions then ref.e.conditions = {} end
+            table.insert(ref.e.conditions, { trigger="show", action="glow", glowType="pixel", timeOp="lt", timeVal=5 })
+            RebuildRules(ref.e)
+        end)
+    end
+
+    -- =============================================
     -- Entry selection + preview
     -- =============================================
 
@@ -1589,13 +1889,15 @@ function BossModModule:BuildUI(parent, db)
             previewId = e.id
         end
 
-        -- Groups have no trigger or load conditions — hide those tabs
+        -- Groups have no trigger, load, or conditions tabs
         local isGroup = e.type == "group"
         subBtns[2]:SetShown(not isGroup)
         subBtns[3]:SetShown(not isGroup)
+        subBtns[4]:SetShown(not isGroup)
         if not isGroup then
             trigCont.Populate(e)
             loadCont.Populate(e)
+            condCont.Populate(e)
         end
         PickSub(isGroup and 1 or activeSub)
     end
