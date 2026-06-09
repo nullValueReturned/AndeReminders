@@ -913,7 +913,7 @@ function BossModModule:BuildUI(parent, db)
     local ShowCtxMenu    -- forward-declared
 
     local SB_W    = 220
-    local ROW_H   = 24
+    local ROW_H   = 44
     local INDENT  = 14
 
     -- -------------------------------------------------------------------------
@@ -2014,6 +2014,32 @@ function BossModModule:BuildUI(parent, db)
 
     local rowPool = {}
 
+    local TYPE_LABELS = { icon="Icon", bar="Progress bar", text="Text", group="" }
+
+    local function GetEntryIcon(e)
+        if e.type == "group" then
+            return "Interface\\AddOns\\AndeReminders\\Media\\group-icon.tga"
+        end
+        if e.iconOverrideId and e.iconOverrideId ~= "" then
+            local sid = tonumber(e.iconOverrideId)
+            if sid then
+                local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                       or (GetSpellTexture and GetSpellTexture(sid))
+                if t then return t end
+            end
+        end
+        local spellId = (e.annSpellId ~= "" and e.annSpellId) or (e.tmrSpellId ~= "" and e.tmrSpellId)
+        if spellId and spellId ~= "" then
+            local sid = tonumber(spellId)
+            if sid then
+                local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                       or (GetSpellTexture and GetSpellTexture(sid))
+                if t then return t end
+            end
+        end
+        return "Interface\\Icons\\inv_misc_questionmark"
+    end
+
     RefreshSidebar = function()
         for _, r in ipairs(rowPool) do r:Hide() end
         local idx = 0
@@ -2024,8 +2050,19 @@ function BossModModule:BuildUI(parent, db)
                 local r = CreateFrame("Button", nil, scrollChild, "BackdropTemplate")
                 r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
                 r:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
-                r.label = r:CreateFontString(nil,"OVERLAY","GameFontNormal")
-                r.label:SetPoint("LEFT",r,"LEFT",6,0); r.label:SetPoint("RIGHT",r,"RIGHT",-4,0); r.label:SetJustifyH("LEFT")
+                r.icon = r:CreateTexture(nil, "ARTWORK")
+                r.icon:SetSize(40, 40)
+                r.icon:SetPoint("LEFT", r, "LEFT", 2, 0)
+                r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+                r.label = r:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                r.label:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 4, -2)
+                r.label:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.label:SetJustifyH("LEFT")
+                r.typeLabel = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                r.typeLabel:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 4, 2)
+                r.typeLabel:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.typeLabel:SetJustifyH("LEFT")
+                r.typeLabel:SetTextColor(0.6, 0.6, 0.6)
                 r:SetScript("OnEnter", function(s)
                     if not ref.e or ref.e.id ~= s.eid then
                         s:SetBackdropColor(s.isGroup and 0.14 or 0.1, s.isGroup and 0.14 or 0.1, 0.22, 1)
@@ -2049,9 +2086,10 @@ function BossModModule:BuildUI(parent, db)
             local idleBg   = r.isGroup and 0.10 or 0.05
             r:SetBackdropColor(active and 0.1 or idleBg, active and 0.22 or idleBg, active and 0.55 or idleBg, 1)
             r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
-            local pfx = (e.type=="group") and (groupExpanded[e.id] and "[-] " or "[+] ")
-                      or (e.type=="bar" and "[=] " or e.type=="text" and "[T] " or "[I] ")
-            r.label:SetText(pfx .. (e.name or "?"))
+            r.icon:SetTexture(GetEntryIcon(e))
+            local namePfx = (e.type == "group") and (groupExpanded[e.id] and "[-] " or "[+] ") or ""
+            r.label:SetText(namePfx .. (e.name or "?"))
+            r.typeLabel:SetText(TYPE_LABELS[e.type] or "")
             r:Show()
             if e.type == "group" then
                 r:SetScript("OnClick", function(_, btn)
