@@ -1763,7 +1763,7 @@ function BossModModule:BuildUI(parent, db)
             if #soundList > 0 then
                 soundDD = ScrollDrop(row, 180, soundList,
                     function() return cond.soundName or soundList[1] end,
-                    function(v) cond.soundName = v end)
+                    function(v) cond.soundName = v; local p = GetSoundPath(v); if p then PlaySoundFile(p, "Master") end end)
                 soundDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
             else
                 local noSndLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
