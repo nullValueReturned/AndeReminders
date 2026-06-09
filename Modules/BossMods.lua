@@ -90,7 +90,8 @@ local function NewEntry(etype, groupId)
     local e = { id = id, type = etype, groupId = groupId }
     ApplyDefs(e)
     -- Progress bars default to timer trigger; icon+text entries to announce
-    if etype == "bar" then e.triggerType = "timer" end
+    if etype == "bar"  then e.triggerType = "timer" end
+    if etype == "text" then e.iconEnabled = false end
     db.entries[id] = e
     return e
 end
@@ -684,6 +685,7 @@ local function GetFrame(e)
     if entryFrames[e.id] then return entryFrames[e.id] end
     local f
     if     e.type == "icon"  then f = MakeIconFrame(e.id)
+    elseif e.type == "text"  then f = MakeIconFrame(e.id)
     elseif e.type == "bar"   then f = MakeBarFrame(e.id)
     elseif e.type == "group" then f = MakeGroupFrame(e.id) end
     if f then
@@ -717,7 +719,7 @@ end
 ShowEntryFrame = function(e, data)
     if not e or e.type == "group" then return end
     local f = GetFrame(e); if not f then return end
-    if     e.type == "icon" then LayoutIconFrame(f, e, data)
+    if     e.type == "icon" or e.type == "text" then LayoutIconFrame(f, e, data)
     elseif e.type == "bar"  then LayoutBarFrame(f, e, data) end
     if e.groupId then
         AddToGroup(e, data); f:Show(); RefreshGroupLayout(e.groupId)
@@ -955,7 +957,8 @@ function BossModModule:BuildUI(parent, db)
         local hdr = typePicker:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         hdr:SetPoint("TOP", typePicker, "TOP", 0, -20); hdr:SetText("Choose Entry Type")
         local types = {
-            { label="Icon & Text",  typ="icon",  desc="Spell icon with configurable text label" },
+            { label="Icon",         typ="icon",  desc="Spell icon with configurable text label" },
+            { label="Text",         typ="text",  desc="Text label only, no icon" },
             { label="Progress Bar", typ="bar",   desc="Countdown bar synced to boss mod timer" },
             { label="Group",        typ="group", desc="Container: positions entries in a stack" },
         }
@@ -1089,6 +1092,7 @@ function BossModModule:BuildUI(parent, db)
 
     -- Section frames (one per type, swapped in/out)
     local iconSec  = CreateFrame("Frame", nil, displayCont); iconSec:SetAllPoints(displayCont)
+    local textSec  = CreateFrame("Frame", nil, displayCont); textSec:SetAllPoints(displayCont)
     local barSec   = CreateFrame("Frame", nil, displayCont); barSec:SetAllPoints(displayCont)
     local grpSec   = CreateFrame("Frame", nil, displayCont); grpSec:SetAllPoints(displayCont)
 
@@ -1097,12 +1101,7 @@ function BossModModule:BuildUI(parent, db)
         local y = -4
         Label(iconSec, 4, y, "Icon", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
 
-        local cbIcon = CreateFrame("CheckButton", nil, iconSec, "UICheckButtonTemplate")
-        cbIcon:SetSize(24, 24); cbIcon:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y+3)
-        local cbIconLbl = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbIconLbl:SetPoint("LEFT",cbIcon,"RIGHT",4,0); cbIconLbl:SetText("Enable icon")
-        cbIcon:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
-
-        Label(iconSec, 160, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 196, y+2, 44, true)
+        Label(iconSec, 4, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 40, y+2, 44, true)
         isizeEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; s:ClearFocus(); RefreshPreview() end)
         isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
         y = y - 30
@@ -1150,12 +1149,55 @@ function BossModModule:BuildUI(parent, db)
 
         -- populate for icon section
         iconSec.Populate = function(e)
-            cbIcon:SetChecked(e.iconEnabled)
             isizeEB:SetText(tostring(e.iconSize or 32))
             fontDD.Refresh()
             fsEB:SetText(tostring(e.fontSize or 14))
             tcSwatch.Refresh()
             posDD.Refresh()
+            dispEB:SetText(e.displayText or "")
+        end
+    end
+
+    -- ---- Text section widgets ----
+    do
+        local y = -4
+        Label(textSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+
+        Label(textSec, 4, y-4, "Font:")
+        local fontOpts = GetFontList()
+        local fontDD = ScrollDrop(textSec, 180, fontOpts,
+            function() return ref.e and ref.e.fontName or fontOpts[1] end,
+            function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end, "font")
+        fontDD:SetPoint("TOPLEFT", textSec, "TOPLEFT", 40, y)
+        Label(textSec, 228, y-3, "Size:")
+        local fsEB = MakeEB(textSec, 260, y, 44, true)
+        fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus(); RefreshPreview() end)
+        fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; RefreshPreview() end)
+        y = y - 28
+
+        Label(textSec, 4, y-3, "Text color:")
+        local tcSwatch = Swatch(textSec,
+            function() return ref.e and ref.e.tcR or 1 end,
+            function() return ref.e and ref.e.tcG or 1 end,
+            function() return ref.e and ref.e.tcB or 1 end,
+            function() return ref.e and ref.e.tcA or 1 end,
+            function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a; RefreshPreview() end end)
+        tcSwatch:SetPoint("TOPLEFT", textSec, "TOPLEFT", 82, y)
+        y = y - 28
+
+        Label(textSec, 4, y-3, "Display text:")
+        local dispEB = MakeEB(textSec, 92, y, 300)
+        dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
+        dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
+        local dispHint = textSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        dispHint:SetPoint("TOPLEFT", textSec, "TOPLEFT", 4, y - 22)
+        dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
+        dispHint:SetTextColor(0.5, 0.5, 0.5)
+
+        textSec.Populate = function(e)
+            fontDD.Refresh()
+            fsEB:SetText(tostring(e.fontSize or 14))
+            tcSwatch.Refresh()
             dispEB:SetText(e.displayText or "")
         end
     end
@@ -1820,9 +1862,11 @@ function BossModModule:BuildUI(parent, db)
 
         -- Display tab sections
         iconSec:SetShown(e.type == "icon")
+        textSec:SetShown(e.type == "text")
         barSec:SetShown(e.type == "bar")
         grpSec:SetShown(e.type == "group")
         if e.type == "icon"  then iconSec.Populate(e) end
+        if e.type == "text"  then textSec.Populate(e) end
         if e.type == "bar"   then barSec.Populate(e) end
         if e.type == "group" then
             grpSec.Populate(e)
@@ -1944,7 +1988,7 @@ function BossModModule:BuildUI(parent, db)
             r:SetBackdropColor(active and 0.1 or idleBg, active and 0.22 or idleBg, active and 0.55 or idleBg, 1)
             r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
             local pfx = (e.type=="group") and (groupExpanded[e.id] and "[-] " or "[+] ")
-                      or (e.type=="bar" and "[=] " or "[T] ")
+                      or (e.type=="bar" and "[=] " or e.type=="text" and "[T] " or "[I] ")
             r.label:SetText(pfx .. (e.name or "?"))
             r:Show()
             if e.type == "group" then
