@@ -41,7 +41,7 @@ local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
 local EDEFS = {
     name         = "New Entry",  anchorX = 0,  anchorY = 200,
-    iconEnabled  = true,         iconSize = 32,
+    iconEnabled  = true,         iconSize = 32,   iconOverrideId = "",
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
@@ -463,9 +463,18 @@ local function LayoutIconFrame(f, e, data)
     local initRem = data.expirationTime and math.max(0, data.expirationTime - GetTime()) or 0
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
-    local showIcon = e.iconEnabled and data.icon
+    local resolvedIcon = data.icon
+    if e.iconOverrideId and e.iconOverrideId ~= "" then
+        local sid = tonumber(e.iconOverrideId)
+        if sid then
+            local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                   or (GetSpellTexture and GetSpellTexture(sid))
+            if t then resolvedIcon = t end
+        end
+    end
+    local showIcon = e.iconEnabled and resolvedIcon
     if showIcon then
-        f.icon:SetTexture(data.icon); f.icon:SetSize(isz, isz); f.icon:Show()
+        f.icon:SetTexture(resolvedIcon); f.icon:SetSize(isz, isz); f.icon:Show()
         local lw  = f.label:GetStringWidth() + 2
         local gap = 4
         local tp  = e.textPosition or "RIGHT"
@@ -1106,6 +1115,49 @@ function BossModModule:BuildUI(parent, db)
         isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
         y = y - 30
 
+        Label(iconSec, 4, y-3, "Override icon:")
+        local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
+        ovrTex:SetSize(20, 20); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        ovrTex:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 100, y-1); ovrTex:SetAlpha(0.2)
+        local ovrEB = MakeEB(iconSec, 124, y, 180)
+        local ovrClearBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
+        ovrClearBtn:SetSize(48, 20); ovrClearBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrClearBtn:SetText("Clear")
+        local ovrHint = iconSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        ovrHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
+        ovrHint:SetText("Spell name or ID  —  blank = use the BW/DBM icon")
+        ovrHint:SetTextColor(0.5, 0.5, 0.5)
+        local function ApplyOvrInput()
+            if not ref.e then return end
+            local txt = ovrEB:GetText()
+            if txt == "" then
+                ref.e.iconOverrideId = ""; ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+                RefreshPreview(); return
+            end
+            local sid = tonumber(txt)
+            local tex, resolvedId
+            if sid then
+                tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                   or (GetSpellTexture and GetSpellTexture(sid))
+                resolvedId = sid
+            else
+                if GetSpellInfo then
+                    local _, _, icon, _, _, _, spellId = GetSpellInfo(txt)
+                    if icon and spellId then tex = icon; resolvedId = spellId; ovrEB:SetText(tostring(spellId)) end
+                end
+            end
+            if tex and resolvedId then
+                ref.e.iconOverrideId = tostring(resolvedId)
+                ovrTex:SetTexture(tex); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
+            else
+                ref.e.iconOverrideId = ""; ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+            end
+            RefreshPreview()
+        end
+        ovrEB:SetScript("OnEnterPressed", function(s) s:ClearFocus(); ApplyOvrInput() end)
+        ovrEB:SetScript("OnEditFocusLost", ApplyOvrInput)
+        ovrClearBtn:SetScript("OnClick", function() ovrEB:SetText(""); ApplyOvrInput() end)
+        y = y - 44
+
         Divider(iconSec, y); y = y - 14
         Label(iconSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
 
@@ -1150,6 +1202,16 @@ function BossModModule:BuildUI(parent, db)
         -- populate for icon section
         iconSec.Populate = function(e)
             isizeEB:SetText(tostring(e.iconSize or 32))
+            ovrEB:SetText(e.iconOverrideId or "")
+            local osid = tonumber(e.iconOverrideId or "")
+            if osid then
+                local otex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(osid))
+                          or (GetSpellTexture and GetSpellTexture(osid))
+                if otex then ovrTex:SetTexture(otex); ovrTex:SetTexCoord(0.07,0.93,0.07,0.93); ovrTex:SetAlpha(1)
+                else ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2) end
+            else
+                ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+            end
             fontDD.Refresh()
             fsEB:SetText(tostring(e.fontSize or 14))
             tcSwatch.Refresh()
