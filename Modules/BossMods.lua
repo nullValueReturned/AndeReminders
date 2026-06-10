@@ -30,6 +30,10 @@ local function GetTexPath(n)
     if LSM then return LSM:Fetch("statusbar", n) or "Interface\\TargetingFrame\\UI-StatusBar" end
     return BTEX_PATHS[n] or "Interface\\TargetingFrame\\UI-StatusBar"
 end
+local function GetSoundList() return LSM and LSM:List("sound") or {} end
+local function GetSoundPath(n) return LSM and LSM:Fetch("sound", n) end
+
+local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
 -- =============================================================================
 -- Entry defaults
@@ -37,7 +41,7 @@ end
 
 local EDEFS = {
     name         = "New Entry",  anchorX = 0,  anchorY = 200,
-    iconEnabled  = true,         iconSize = 32,
+    iconEnabled  = true,         iconSize = 32,   iconOverrideId = "",
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
@@ -54,6 +58,7 @@ local EDEFS = {
     tmrSpellId="", tmrText="",  tmrTextOp="find", tmrCount="", tmrRemaining="",
     trigStage    = "",
     loadClass="", loadEncId="", loadDiff="", loadRole="",
+    loadZoneId="",
 }
 
 local function ApplyDefs(e)
@@ -86,7 +91,8 @@ local function NewEntry(etype, groupId)
     local e = { id = id, type = etype, groupId = groupId }
     ApplyDefs(e)
     -- Progress bars default to timer trigger; icon+text entries to announce
-    if etype == "bar" then e.triggerType = "timer" end
+    if etype == "bar"  then e.triggerType = "timer" end
+    if etype == "text" then e.iconEnabled = false end
     db.entries[id] = e
     return e
 end
@@ -121,6 +127,7 @@ end
 
 local HandleAnnounce, HandleTimerStart, HandleTimerStop
 local ShowEntryFrame, HideEntryFrame, RefreshGroupLayout
+local FireConditionAction
 
 -- =============================================================================
 -- Runtime state
@@ -135,6 +142,8 @@ local activeBars        = {}  -- [entryId] = barData
 local annTimers         = {}  -- [entryId] = C_Timer handle
 local schedShows        = {}  -- [entryId] = C_Timer handle
 local groupActiveKids   = {}  -- [groupId] = ordered list of visible child ids
+local condFired         = {}  -- [entryId] = { [condIdx] = true }  reset on ShowEntryFrame
+local condCleanup       = {}  -- [entryId] = list of cleanup fns    called on HideEntryFrame
 
 local function GetStage() return BigWigsLoader and bwStage or dbmStage end
 
@@ -169,6 +178,16 @@ local function PassesLoad(e)
         local role = UnitGroupRolesAssigned("player")
         if role == "NONE" then role = GetSpecializationRole(GetSpecialization()) end
         if role ~= e.loadRole then return false end
+    end
+    if e.loadZoneId ~= "" then
+        local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+        local val   = e.loadZoneId
+        if val:sub(1,1) == "g" then
+            local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
+            if tostring(groupId) ~= val:sub(2) then return false end
+        else
+            if tostring(mapId) ~= val then return false end
+        end
     end
     return true
 end
@@ -419,9 +438,24 @@ local function MakeIconFrame(id)
     f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     -- Live-update label when displayTmpl contains %t
     f:SetScript("OnUpdate", function(self)
-        if not self.expTime or not self.displayTmpl or not self.displayTmpl:find("%%t") then return end
+        if not self.expTime then return end
         local rem = math.max(0, self.expTime - GetTime())
-        self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        if self.displayTmpl and self.displayTmpl:find("%%t") then
+            self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        end
+        local e = AR.db and AR.db.bossmods and AR.db.bossmods.entries[id]
+        if e and e.conditions then
+            if not condFired[id] then condFired[id] = {} end
+            for ci, cond in ipairs(e.conditions) do
+                if cond.trigger == "time" and not condFired[id][ci] then
+                    local tval = cond.timeVal or 0
+                    local met  = (cond.timeOp == "eq" and math.abs(rem - tval) < 0.15)
+                              or (cond.timeOp == "lt" and rem < tval)
+                              or (cond.timeOp == "gt" and rem > tval)
+                    if met then condFired[id][ci] = true; FireConditionAction(id, cond) end
+                end
+            end
+        end
     end)
     f:Hide(); return f
 end
@@ -440,9 +474,13 @@ local function LayoutIconFrame(f, e, data)
     local initRem = data.expirationTime and math.max(0, data.expirationTime - GetTime()) or 0
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
-    local showIcon = e.iconEnabled and data.icon
+    local resolvedIcon = data.icon
+    if e.iconOverrideId and e.iconOverrideId ~= "" then
+        resolvedIcon = tonumber(e.iconOverrideId) or e.iconOverrideId
+    end
+    local showIcon = e.iconEnabled and resolvedIcon
     if showIcon then
-        f.icon:SetTexture(data.icon); f.icon:SetSize(isz, isz); f.icon:Show()
+        f.icon:SetTexture(resolvedIcon); f.icon:SetSize(isz, isz); f.icon:Show()
         local lw  = f.label:GetStringWidth() + 2
         local gap = 4
         local tp  = e.textPosition or "RIGHT"
@@ -477,6 +515,20 @@ local function MakeBarFrame(id)
     f:SetScript("OnUpdate", function(self)
         if not self.expTime then return end
         local rem = self.expTime - GetTime()
+        local e = AR.db and AR.db.bossmods and AR.db.bossmods.entries[id]
+        if e and e.conditions then
+            local rclamp = math.max(0, rem)
+            if not condFired[id] then condFired[id] = {} end
+            for ci, cond in ipairs(e.conditions) do
+                if cond.trigger == "time" and not condFired[id][ci] then
+                    local tval = cond.timeVal or 0
+                    local met  = (cond.timeOp == "eq" and math.abs(rclamp - tval) < 0.15)
+                              or (cond.timeOp == "lt" and rclamp < tval)
+                              or (cond.timeOp == "gt" and rclamp > tval)
+                    if met then condFired[id][ci] = true; FireConditionAction(id, cond) end
+                end
+            end
+        end
         if rem <= 0 then self:Hide(); return end
         self.bar:SetValue(self.dur > 0 and rem/self.dur or 0)
         if not self.hideTimer then
@@ -510,11 +562,15 @@ local function LayoutBarFrame(f, e, data)
     f.expTime = data.expirationTime; f.dur = data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
-    local isz      = bh
-    local showIcon = e.iconEnabled and data.icon
+    local isz = bh
+    local resolvedBarIcon = data.icon
+    if e.iconOverrideId and e.iconOverrideId ~= "" then
+        resolvedBarIcon = tonumber(e.iconOverrideId) or e.iconOverrideId
+    end
+    local showIcon = e.iconEnabled and resolvedBarIcon
     f.bar:ClearAllPoints(); f.icon:ClearAllPoints()
     if showIcon then
-        f.icon:SetTexture(data.icon); f.icon:SetSize(isz, isz); f.icon:Show()
+        f.icon:SetTexture(resolvedBarIcon); f.icon:SetSize(isz, isz); f.icon:Show()
         f.icon:SetPoint("LEFT", f, "LEFT")
         f.bar:SetPoint("LEFT", f.icon, "RIGHT", 0, 0)
         f.bar:SetSize(bw - isz, bh)
@@ -586,6 +642,61 @@ RefreshGroupLayout = function(gid)
 end
 
 -- =============================================================================
+-- Condition action executor
+-- =============================================================================
+
+FireConditionAction = function(entryId, cond)
+    local f = entryFrames[entryId]; if not f then return end
+    local action = cond.action or "glow"
+
+    if action == "glow" then
+        if LCG then
+            local key = "arcond" .. entryId
+            local gt  = cond.glowType or "pixel"
+            if     gt == "pixel"    then LCG.PixelGlow_Start(f, nil, nil, nil, nil, nil, 0, 0, false, key)
+            elseif gt == "proc"     then LCG.ProcGlow_Start(f, {}, key)
+            elseif gt == "autocast" then LCG.AutoCastGlow_Start(f, nil, nil, nil, nil, 0, 0, key)
+            end
+            if not condCleanup[entryId] then condCleanup[entryId] = {} end
+            local gt2 = gt
+            table.insert(condCleanup[entryId], function()
+                if not LCG then return end
+                if     gt2 == "pixel"    then LCG.PixelGlow_Stop(f, key)
+                elseif gt2 == "proc"     then LCG.ProcGlow_Stop(f, key)
+                elseif gt2 == "autocast" then LCG.AutoCastGlow_Stop(f, key)
+                end
+            end)
+        end
+
+    elseif action == "sound" then
+        local path = GetSoundPath(cond.soundName or "")
+        if path then PlaySoundFile(path, "Master") end
+
+    elseif action == "scale" then
+        f:SetScale(cond.scaleVal or 1.5)
+        if not condCleanup[entryId] then condCleanup[entryId] = {} end
+        table.insert(condCleanup[entryId], function() f:SetScale(1.0) end)
+
+    elseif action == "barColor" then
+        if f.bar then
+            f.bar:SetStatusBarColor(cond.bcR or 1, cond.bcG or 0, cond.bcB or 0, cond.bcA or 1)
+        end
+
+    elseif action == "fontColor" then
+        if f.label     then f.label:SetTextColor(    cond.fcR or 1, cond.fcG or 1, cond.fcB or 0, cond.fcA or 1) end
+        if f.timeLabel then f.timeLabel:SetTextColor(cond.fcR or 1, cond.fcG or 1, cond.fcB or 0, cond.fcA or 1) end
+
+    elseif action == "flash" then
+        local count = 0
+        C_Timer.NewTicker(0.1, function(ticker)
+            count = count + 1
+            if f:IsShown() then f:SetAlpha(count % 2 == 0 and 1.0 or 0.15) end
+            if count >= 8 then ticker:Cancel(); if f:IsShown() then f:SetAlpha(1.0) end end
+        end)
+    end
+end
+
+-- =============================================================================
 -- GetFrame / ShowEntryFrame / HideEntryFrame
 -- =============================================================================
 
@@ -593,6 +704,7 @@ local function GetFrame(e)
     if entryFrames[e.id] then return entryFrames[e.id] end
     local f
     if     e.type == "icon"  then f = MakeIconFrame(e.id)
+    elseif e.type == "text"  then f = MakeIconFrame(e.id)
     elseif e.type == "bar"   then f = MakeBarFrame(e.id)
     elseif e.type == "group" then f = MakeGroupFrame(e.id) end
     if f then
@@ -626,7 +738,7 @@ end
 ShowEntryFrame = function(e, data)
     if not e or e.type == "group" then return end
     local f = GetFrame(e); if not f then return end
-    if     e.type == "icon" then LayoutIconFrame(f, e, data)
+    if     e.type == "icon" or e.type == "text" then LayoutIconFrame(f, e, data)
     elseif e.type == "bar"  then LayoutBarFrame(f, e, data) end
     if e.groupId then
         AddToGroup(e, data); f:Show(); RefreshGroupLayout(e.groupId)
@@ -635,9 +747,36 @@ ShowEntryFrame = function(e, data)
         f:SetPoint("CENTER", UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
         f:Show()
     end
+    -- Reset per-activation state then fire "show" conditions
+    condFired[e.id]   = {}
+    condCleanup[e.id] = {}
+    if e.conditions then
+        for ci, cond in ipairs(e.conditions) do
+            if cond.trigger == "show" then
+                condFired[e.id][ci] = true
+                FireConditionAction(e.id, cond)
+            end
+        end
+    end
 end
 
 HideEntryFrame = function(id)
+    -- Fire "hide" conditions before hiding
+    local hdb = AR.db
+    if hdb and hdb.bossmods then
+        local he = hdb.bossmods.entries[id]
+        if he and he.conditions then
+            for _, cond in ipairs(he.conditions) do
+                if cond.trigger == "hide" then FireConditionAction(id, cond) end
+            end
+        end
+    end
+    -- Run cleanup (stop glows, reset scale)
+    if condCleanup[id] then
+        for _, fn in ipairs(condCleanup[id]) do fn() end
+        condCleanup[id] = nil
+    end
+    condFired[id] = nil
     local f = entryFrames[id]; if f then f:Hide() end
     RemoveFromGroup(id)
 end
@@ -772,6 +911,202 @@ local function Divider(parent, y)
 end
 
 -- =============================================================================
+-- Icon Picker
+-- =============================================================================
+
+local iconPickerFrame = nil
+local iconPickerCb    = nil
+local allIconPaths    = nil  -- cached; built once on first open
+
+local IC_SIZE     = 36
+local IC_CELL     = 40   -- icon + 2px margin each side
+local IC_COLS     = 13
+local IC_ROWS_VIS = 11
+local IC_POOL     = IC_COLS * (IC_ROWS_VIS + 2)
+local IC_GRID_H   = IC_ROWS_VIS * IC_CELL  -- used for max-scroll calculation
+
+local function BuildIconPicker()
+    local W, H = 600, 520
+    local f = CreateFrame("Frame", "ARIconPickerFrame", UIParent, "BackdropTemplate")
+    f:SetSize(W, H); f:SetPoint("CENTER", UIParent, "CENTER")
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetMovable(true); f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetBackdrop({
+        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
+        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
+        edgeSize = 24, tile = true, tileSize = 32,
+        insets   = { left=6, right=6, top=6, bottom=6 },
+    })
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", f, "TOP", 0, -14); title:SetText("Choose Icon")
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    local searchLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    searchLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -44); searchLbl:SetText("Search:")
+    local searchEB = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
+    searchEB:SetSize(280, 20); searchEB:SetPoint("LEFT", searchLbl, "RIGHT", 6, 0)
+    searchEB:SetAutoFocus(false)
+
+    local statusLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusLbl:SetPoint("LEFT", searchEB, "RIGHT", 12, 0)
+    statusLbl:SetTextColor(0.6, 0.6, 0.6)
+
+    -- Grid area (clipped so icons outside bounds are invisible)
+    local gridFrame = CreateFrame("Frame", nil, f)
+    gridFrame:SetPoint("TOPLEFT",     f, "TOPLEFT",      8, -70)
+    gridFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -26,   8)
+    gridFrame:SetClipsChildren(true)
+
+    -- Scrollbar
+    local sb = CreateFrame("Slider", nil, f)
+    sb:SetOrientation("VERTICAL"); sb:SetWidth(16)
+    sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -6, -70)
+    sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6,   8)
+    local sbBg = sb:CreateTexture(nil, "BACKGROUND"); sbBg:SetAllPoints(); sbBg:SetColorTexture(0,0,0,0.3)
+    local sbTh = sb:CreateTexture(nil, "OVERLAY")
+    sbTh:SetTexture("Interface/Buttons/UI-ScrollBar-Knob"); sbTh:SetSize(16,16)
+    sb:SetThumbTexture(sbTh); sb:SetMinMaxValues(0,0); sb:SetValue(0)
+
+    -- Button pool (only visible rows are positioned + shown)
+    local pool = {}
+    for i = 1, IC_POOL do
+        local btn = CreateFrame("Button", nil, gridFrame)
+        btn:SetSize(IC_SIZE, IC_SIZE)
+        local tex = btn:CreateTexture(nil, "ARTWORK")
+        tex:SetAllPoints(); tex:SetTexCoord(0.07, 0.93, 0.07, 0.93); btn.tex = tex
+        local hl  = btn:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.25)
+        local sel = btn:CreateTexture(nil, "OVERLAY")
+        sel:SetAllPoints(); sel:SetColorTexture(1, 0.8, 0, 0.4); sel:Hide(); btn.selTex = sel
+        btn:Hide(); pool[i] = btn
+    end
+
+    local filteredIcons = {}
+    local scrollOffset  = 0
+    local selectedPath  = nil
+
+    local function UpdateGrid()
+        for i = 1, #pool do pool[i]:Hide() end
+        local firstRow = math.floor(scrollOffset / IC_CELL)
+        local lastRow  = firstRow + IC_ROWS_VIS + 1
+        local pi = 0
+        for iconIdx = firstRow * IC_COLS + 1, math.min((lastRow + 1) * IC_COLS, #filteredIcons) do
+            pi = pi + 1; if pi > #pool then break end
+            local btn = pool[pi]
+            local row = math.floor((iconIdx - 1) / IC_COLS)
+            local col = (iconIdx - 1) % IC_COLS
+            btn:ClearAllPoints()
+            btn:SetPoint("TOPLEFT", gridFrame, "TOPLEFT", col * IC_CELL, -(row * IC_CELL - scrollOffset))
+            btn.iconPath = filteredIcons[iconIdx]
+            btn.tex:SetTexture(filteredIcons[iconIdx])
+            btn.selTex:SetShown(filteredIcons[iconIdx] == selectedPath)
+            btn:Show()
+        end
+    end
+
+    local searchTimer = nil
+    local function RebuildFiltered(query)
+        filteredIcons = {}
+        query = query and query:lower() or ""
+        if allIconPaths then
+            if query == "" then
+                for _, v in ipairs(allIconPaths) do filteredIcons[#filteredIcons+1] = v end
+            else
+                for _, v in ipairs(allIconPaths) do
+                    if v:lower():find(query, 1, true) then filteredIcons[#filteredIcons+1] = v end
+                end
+            end
+        end
+        local totalH    = math.ceil(#filteredIcons / IC_COLS) * IC_CELL
+        local maxScroll = math.max(0, totalH - IC_GRID_H)
+        sb:SetMinMaxValues(0, maxScroll); sb:SetValue(0)
+        scrollOffset = 0
+        statusLbl:SetText(#filteredIcons .. " icons")
+        UpdateGrid()
+    end
+
+    sb:SetScript("OnValueChanged", function(_, v) scrollOffset = v; UpdateGrid() end)
+    gridFrame:EnableMouseWheel(true)
+    gridFrame:SetScript("OnMouseWheel", function(_, d)
+        local mn, mx = sb:GetMinMaxValues()
+        sb:SetValue(math.max(mn, math.min(mx, sb:GetValue() - d * IC_CELL * 3)))
+    end)
+
+    for i = 1, #pool do
+        pool[i]:SetScript("OnClick", function(self)
+            if self.iconPath and iconPickerCb then
+                iconPickerCb(self.iconPath)
+                selectedPath = self.iconPath
+                UpdateGrid()
+            end
+        end)
+        pool[i]:SetScript("OnEnter", function(self)
+            if self.iconPath then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                local name = self.iconPath:match("[^\\/]+$") or self.iconPath
+                GameTooltip:SetText(name, 1, 1, 1, 1, true); GameTooltip:Show()
+            end
+        end)
+        pool[i]:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    searchEB:SetScript("OnTextChanged", function(self)
+        if searchTimer then searchTimer:Cancel(); searchTimer = nil end
+        searchTimer = C_Timer.NewTimer(0.3, function()
+            searchTimer = nil; RebuildFiltered(self:GetText())
+        end)
+    end)
+
+    f.Reopen = function(currentPath)
+        selectedPath = currentPath
+        if not allIconPaths then
+            allIconPaths = {}
+            local seen = {}
+            -- GetMacroIconInfo returns (path/fileID, isAtlas). Atlas icons need
+            -- SetAtlas, not SetTexture, so we skip them here.
+            local n = GetNumMacroIcons and GetNumMacroIcons() or 0
+            for i = 1, n do
+                local p, isAtlas = GetMacroIconInfo and GetMacroIconInfo(i)
+                if p and p ~= "" and not isAtlas then
+                    if not seen[p] then seen[p] = true; allIconPaths[#allIconPaths+1] = p end
+                end
+            end
+            -- Fallback: derive icons from spell textures if the macro API gave nothing
+            -- (happens when all macro icons are atlas-based in this client version).
+            if #allIconPaths == 0 then
+                for spellId = 1, 50000 do
+                    local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(spellId))
+                             or (GetSpellTexture and GetSpellTexture(spellId))
+                    if tex and not seen[tex] then
+                        seen[tex] = true; allIconPaths[#allIconPaths+1] = tex
+                    end
+                end
+            end
+        end
+        searchEB:SetText(""); searchEB:SetFocus()
+        RebuildFiltered("")
+    end
+
+    f:Hide()
+    iconPickerFrame = f
+end
+
+local function ShowIconPicker(callback, currentPath)
+    iconPickerCb = callback
+    if not iconPickerFrame then BuildIconPicker() end
+    iconPickerFrame.Reopen(currentPath)
+    iconPickerFrame:Show()
+end
+
+-- =============================================================================
 -- BuildUI
 -- =============================================================================
 
@@ -784,7 +1119,7 @@ function BossModModule:BuildUI(parent, db)
     local ShowCtxMenu    -- forward-declared
 
     local SB_W    = 220
-    local ROW_H   = 24
+    local ROW_H   = 44
     local INDENT  = 14
 
     -- -------------------------------------------------------------------------
@@ -837,7 +1172,8 @@ function BossModModule:BuildUI(parent, db)
         local hdr = typePicker:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         hdr:SetPoint("TOP", typePicker, "TOP", 0, -20); hdr:SetText("Choose Entry Type")
         local types = {
-            { label="Icon & Text",  typ="icon",  desc="Spell icon with configurable text label" },
+            { label="Icon",         typ="icon",  desc="Spell icon with configurable text label" },
+            { label="Text",         typ="text",  desc="Text label only, no icon" },
             { label="Progress Bar", typ="bar",   desc="Countdown bar synced to boss mod timer" },
             { label="Group",        typ="group", desc="Container: positions entries in a stack" },
         }
@@ -878,14 +1214,14 @@ function BossModModule:BuildUI(parent, db)
     local delBtn = CreateFrame("Button", nil, sp, "UIPanelButtonTemplate")
     delBtn:SetSize(64, 20); delBtn:SetPoint("LEFT", nameEB, "RIGHT", 8, 0); delBtn:SetText("Delete")
 
-    -- Sub-tabs: Display | Trigger | Load
-    local SUB_NAMES = { "Display", "Trigger", "Load" }
+    -- Sub-tabs: Display | Trigger | Load | Conditions
+    local SUB_NAMES = { "Display", "Trigger", "Load", "Conditions" }
     local subBtns, subConts = {}, {}
     local activeSub = 1
 
     local function PickSub(idx)
         activeSub = idx
-        for i = 1, 3 do
+        for i = 1, #subBtns do
             subConts[i]:SetShown(i == idx)
             subBtns[i]:SetBackdropColor(i==idx and 0.12 or 0.05, i==idx and 0.26 or 0.05, i==idx and 0.6 or 0.05, 1)
         end
@@ -912,6 +1248,7 @@ function BossModModule:BuildUI(parent, db)
     local displayCont = subConts[1]
     local trigCont    = subConts[2]
     local loadCont    = subConts[3]
+    local condCont    = subConts[4]
 
     -- =============================================
     -- Shared entry reference pointer
@@ -970,6 +1307,7 @@ function BossModModule:BuildUI(parent, db)
 
     -- Section frames (one per type, swapped in/out)
     local iconSec  = CreateFrame("Frame", nil, displayCont); iconSec:SetAllPoints(displayCont)
+    local textSec  = CreateFrame("Frame", nil, displayCont); textSec:SetAllPoints(displayCont)
     local barSec   = CreateFrame("Frame", nil, displayCont); barSec:SetAllPoints(displayCont)
     local grpSec   = CreateFrame("Frame", nil, displayCont); grpSec:SetAllPoints(displayCont)
 
@@ -978,15 +1316,49 @@ function BossModModule:BuildUI(parent, db)
         local y = -4
         Label(iconSec, 4, y, "Icon", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
 
-        local cbIcon = CreateFrame("CheckButton", nil, iconSec, "UICheckButtonTemplate")
-        cbIcon:SetSize(24, 24); cbIcon:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y+3)
-        local cbIconLbl = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbIconLbl:SetPoint("LEFT",cbIcon,"RIGHT",4,0); cbIconLbl:SetText("Enable icon")
-        cbIcon:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
-
-        Label(iconSec, 160, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 196, y+2, 44, true)
+        Label(iconSec, 4, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 40, y+2, 44, true)
         isizeEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; s:ClearFocus(); RefreshPreview() end)
         isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
         y = y - 30
+
+        Label(iconSec, 4, y-3, "Override icon:")
+        local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
+        ovrTex:SetSize(20, 20); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        ovrTex:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 100, y-1); ovrTex:SetAlpha(0.2)
+        local ovrEB = MakeEB(iconSec, 124, y, 120)
+        local ovrChooseBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
+        ovrChooseBtn:SetSize(60, 20); ovrChooseBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrChooseBtn:SetText("Choose")
+        local ovrClearBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
+        ovrClearBtn:SetSize(48, 20); ovrClearBtn:SetPoint("LEFT", ovrChooseBtn, "RIGHT", 4, 0); ovrClearBtn:SetText("Clear")
+        local ovrHint = iconSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        ovrHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
+        ovrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
+        ovrHint:SetTextColor(0.5, 0.5, 0.5)
+        local function ApplyOvrInput()
+            if not ref.e then return end
+            local txt = ovrEB:GetText()
+            ref.e.iconOverrideId = txt
+            if txt == "" then
+                ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+            else
+                local texVal = tonumber(txt) or txt
+                ovrTex:SetTexture(texVal); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
+            end
+            RefreshPreview()
+        end
+        ovrEB:SetScript("OnEnterPressed", function(s) s:ClearFocus(); ApplyOvrInput() end)
+        ovrEB:SetScript("OnEditFocusLost", ApplyOvrInput)
+        ovrChooseBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            ShowIconPicker(function(path)
+                ref.e.iconOverrideId = path
+                ovrEB:SetText(path)
+                ovrTex:SetTexture(path); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
+                RefreshPreview()
+            end, ref.e.iconOverrideId)
+        end)
+        ovrClearBtn:SetScript("OnClick", function() ovrEB:SetText(""); ApplyOvrInput() end)
+        y = y - 44
 
         Divider(iconSec, y); y = y - 14
         Label(iconSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
@@ -1031,12 +1403,62 @@ function BossModModule:BuildUI(parent, db)
 
         -- populate for icon section
         iconSec.Populate = function(e)
-            cbIcon:SetChecked(e.iconEnabled)
             isizeEB:SetText(tostring(e.iconSize or 32))
+            ovrEB:SetText(e.iconOverrideId or "")
+            if e.iconOverrideId and e.iconOverrideId ~= "" then
+                local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
+                ovrTex:SetTexture(texVal); ovrTex:SetTexCoord(0.07,0.93,0.07,0.93); ovrTex:SetAlpha(1)
+            else
+                ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+            end
             fontDD.Refresh()
             fsEB:SetText(tostring(e.fontSize or 14))
             tcSwatch.Refresh()
             posDD.Refresh()
+            dispEB:SetText(e.displayText or "")
+        end
+    end
+
+    -- ---- Text section widgets ----
+    do
+        local y = -4
+        Label(textSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+
+        Label(textSec, 4, y-4, "Font:")
+        local fontOpts = GetFontList()
+        local fontDD = ScrollDrop(textSec, 180, fontOpts,
+            function() return ref.e and ref.e.fontName or fontOpts[1] end,
+            function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end, "font")
+        fontDD:SetPoint("TOPLEFT", textSec, "TOPLEFT", 40, y)
+        Label(textSec, 228, y-3, "Size:")
+        local fsEB = MakeEB(textSec, 260, y, 44, true)
+        fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus(); RefreshPreview() end)
+        fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; RefreshPreview() end)
+        y = y - 28
+
+        Label(textSec, 4, y-3, "Text color:")
+        local tcSwatch = Swatch(textSec,
+            function() return ref.e and ref.e.tcR or 1 end,
+            function() return ref.e and ref.e.tcG or 1 end,
+            function() return ref.e and ref.e.tcB or 1 end,
+            function() return ref.e and ref.e.tcA or 1 end,
+            function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a; RefreshPreview() end end)
+        tcSwatch:SetPoint("TOPLEFT", textSec, "TOPLEFT", 82, y)
+        y = y - 28
+
+        Label(textSec, 4, y-3, "Display text:")
+        local dispEB = MakeEB(textSec, 92, y, 300)
+        dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
+        dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
+        local dispHint = textSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        dispHint:SetPoint("TOPLEFT", textSec, "TOPLEFT", 4, y - 22)
+        dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
+        dispHint:SetTextColor(0.5, 0.5, 0.5)
+
+        textSec.Populate = function(e)
+            fontDD.Refresh()
+            fsEB:SetText(tostring(e.fontSize or 14))
+            tcSwatch.Refresh()
             dispEB:SetText(e.displayText or "")
         end
     end
@@ -1083,6 +1505,45 @@ function BossModModule:BuildUI(parent, db)
         local cbHTL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbHTL:SetPoint("LEFT",cbHT,"RIGHT",4,0); cbHTL:SetText("Hide timer text")
         cbHT:SetScript("OnClick", function(s) if ref.e then ref.e.barHideTimer = s:GetChecked(); RefreshPreview() end end)
         y = y - 28
+
+        Label(barSec, 4, y-3, "Override icon:")
+        local barOvrTex = barSec:CreateTexture(nil, "ARTWORK")
+        barOvrTex:SetSize(20, 20); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        barOvrTex:SetPoint("TOPLEFT", barSec, "TOPLEFT", 100, y-1); barOvrTex:SetAlpha(0.2)
+        local barOvrEB = MakeEB(barSec, 124, y, 120)
+        local barOvrChooseBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
+        barOvrChooseBtn:SetSize(60, 20); barOvrChooseBtn:SetPoint("LEFT", barOvrEB, "RIGHT", 4, 0); barOvrChooseBtn:SetText("Choose")
+        local barOvrClearBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
+        barOvrClearBtn:SetSize(48, 20); barOvrClearBtn:SetPoint("LEFT", barOvrChooseBtn, "RIGHT", 4, 0); barOvrClearBtn:SetText("Clear")
+        local barOvrHint = barSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        barOvrHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
+        barOvrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
+        barOvrHint:SetTextColor(0.5, 0.5, 0.5)
+        local function ApplyBarOvrInput()
+            if not ref.e then return end
+            local txt = barOvrEB:GetText()
+            ref.e.iconOverrideId = txt
+            if txt == "" then
+                barOvrTex:SetTexture(nil); barOvrTex:SetAlpha(0.2)
+            else
+                local texVal = tonumber(txt) or txt
+                barOvrTex:SetTexture(texVal); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); barOvrTex:SetAlpha(1)
+            end
+            RefreshPreview()
+        end
+        barOvrEB:SetScript("OnEnterPressed", function(s) s:ClearFocus(); ApplyBarOvrInput() end)
+        barOvrEB:SetScript("OnEditFocusLost", ApplyBarOvrInput)
+        barOvrChooseBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            ShowIconPicker(function(path)
+                ref.e.iconOverrideId = path
+                barOvrEB:SetText(path)
+                barOvrTex:SetTexture(path); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); barOvrTex:SetAlpha(1)
+                RefreshPreview()
+            end, ref.e.iconOverrideId)
+        end)
+        barOvrClearBtn:SetScript("OnClick", function() barOvrEB:SetText(""); ApplyBarOvrInput() end)
+        y = y - 44
 
         Divider(barSec, y); y = y - 14
         Label(barSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
@@ -1131,6 +1592,13 @@ function BossModModule:BuildUI(parent, db)
             bhEB:SetText(tostring(e.barHeight or 22))
             cbBI:SetChecked(e.iconEnabled)
             cbHT:SetChecked(e.barHideTimer or false)
+            barOvrEB:SetText(e.iconOverrideId or "")
+            if e.iconOverrideId and e.iconOverrideId ~= "" then
+                local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
+                barOvrTex:SetTexture(texVal); barOvrTex:SetTexCoord(0.07,0.93,0.07,0.93); barOvrTex:SetAlpha(1)
+            else
+                barOvrTex:SetTexture(nil); barOvrTex:SetAlpha(0.2)
+            end
             bfDD.Refresh()
             bfsEB:SetText(tostring(e.barFontSize or 12))
             btcSwatch.Refresh(); btpDD.Refresh()
@@ -1285,8 +1753,28 @@ function BossModModule:BuildUI(parent, db)
             Label(annSec, 4, ay, "Announce Filters", "GameFontNormal"):SetTextColor(0.8,0.8,0.8); ay = ay - 22
             Label(annSec, 4, ay-3, "Spell ID (blank=any):")
             local annSI = MakeEB(annSec, 148, ay, 80)
-            annSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annSpellId = s:GetText() end; s:ClearFocus() end)
-            annSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annSpellId = s:GetText() end end)
+            local annSpellIcon = CreateFrame("Button", nil, annSec)
+            annSpellIcon:SetSize(22, 22); annSpellIcon:SetPoint("LEFT", annSI, "RIGHT", 4, 0); annSpellIcon:EnableMouse(true)
+            local annSITex = annSpellIcon:CreateTexture(nil, "ARTWORK"); annSITex:SetAllPoints(); annSITex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+            annSpellIcon:Hide()
+            local function UpdateAnnSpellIcon(sid)
+                sid = tonumber(sid)
+                if not sid or sid == 0 then annSpellIcon:Hide(); return end
+                local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                         or (GetSpellTexture and GetSpellTexture(sid))
+                if tex then annSITex:SetTexture(tex); annSpellIcon.spellId = sid; annSpellIcon:Show()
+                else annSpellIcon:Hide() end
+            end
+            annSpellIcon:SetScript("OnEnter", function(self)
+                if self.spellId then
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetSpellByID(self.spellId)
+                    GameTooltip:Show()
+                end
+            end)
+            annSpellIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            annSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annSpellId = s:GetText() end; s:ClearFocus(); UpdateAnnSpellIcon(s:GetText()) end)
+            annSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annSpellId = s:GetText() end; UpdateAnnSpellIcon(s:GetText()) end)
             ay = ay - 26
             Label(annSec, 4, ay-3, "Message:")
             local annTxt = MakeEB(annSec, 64, ay, 200)
@@ -1309,6 +1797,7 @@ function BossModModule:BuildUI(parent, db)
             Label(annSec, 334, ay-3, "seconds")
             annSec.Populate = function(e)
                 annSI:SetText(e.annSpellId or "")
+                UpdateAnnSpellIcon(e.annSpellId or "")
                 annTxt:SetText(e.annText or "")
                 annOpDD.Refresh()
                 annCnt:SetText(e.annCount or "")
@@ -1326,8 +1815,28 @@ function BossModModule:BuildUI(parent, db)
             Label(tmrSec, 4, ty, "Timer Filters", "GameFontNormal"):SetTextColor(0.8,0.8,0.8); ty = ty - 22
             Label(tmrSec, 4, ty-3, "Spell ID (blank=any):")
             local tmrSI = MakeEB(tmrSec, 148, ty, 80)
-            tmrSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end; s:ClearFocus() end)
-            tmrSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end end)
+            local tmrSpellIcon = CreateFrame("Button", nil, tmrSec)
+            tmrSpellIcon:SetSize(22, 22); tmrSpellIcon:SetPoint("LEFT", tmrSI, "RIGHT", 4, 0); tmrSpellIcon:EnableMouse(true)
+            local tmrSITex = tmrSpellIcon:CreateTexture(nil, "ARTWORK"); tmrSITex:SetAllPoints(); tmrSITex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+            tmrSpellIcon:Hide()
+            local function UpdateTmrSpellIcon(sid)
+                sid = tonumber(sid)
+                if not sid or sid == 0 then tmrSpellIcon:Hide(); return end
+                local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                         or (GetSpellTexture and GetSpellTexture(sid))
+                if tex then tmrSITex:SetTexture(tex); tmrSpellIcon.spellId = sid; tmrSpellIcon:Show()
+                else tmrSpellIcon:Hide() end
+            end
+            tmrSpellIcon:SetScript("OnEnter", function(self)
+                if self.spellId then
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetSpellByID(self.spellId)
+                    GameTooltip:Show()
+                end
+            end)
+            tmrSpellIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)
+            tmrSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end; s:ClearFocus(); UpdateTmrSpellIcon(s:GetText()) end)
+            tmrSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end; UpdateTmrSpellIcon(s:GetText()) end)
             ty = ty - 26
             Label(tmrSec, 4, ty-3, "Bar text:")
             local tmrTxt = MakeEB(tmrSec, 66, ty, 200)
@@ -1351,6 +1860,7 @@ function BossModModule:BuildUI(parent, db)
             Label(tmrSec, 158, ty-3, "s remain  (blank = show on start)")
             tmrSec.Populate = function(e)
                 tmrSI:SetText(e.tmrSpellId or "")
+                UpdateTmrSpellIcon(e.tmrSpellId or "")
                 tmrTxt:SetText(e.tmrText or "")
                 tmrOpDD.Refresh()
                 tmrCnt:SetText(e.tmrCount or "")
@@ -1412,6 +1922,96 @@ function BossModModule:BuildUI(parent, db)
         local encEB = MakeEB(loadCont, 178, y, 90)
         encEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadEncId = s:GetText() end; s:ClearFocus() end)
         encEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadEncId = s:GetText() end end)
+        encEB:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Midnight Season 1 Encounter IDs", 1, 0.82, 0)
+            GameTooltip:AddLine("|cffffd100The Voidspire|r")
+            GameTooltip:AddDoubleLine("  Imperator Averzian",   "3176", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Vorasius",              "3177", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Vaelgor & Ezzorak",     "3178", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Fallen-King Salhadaar", "3179", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Lightblinded Vanguard", "3180", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Crown of the Cosmos",   "3181", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100March on Quel'Danas|r")
+            GameTooltip:AddDoubleLine("  Belo'ren, Child of Al'ar", "3182", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Midnight Falls",            "3183", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100Sporefall|r")
+            GameTooltip:AddDoubleLine("  Rotmire",   "3159", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100The Dreamrift|r")
+            GameTooltip:AddDoubleLine("  Chimaerus", "3306", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:Show()
+        end)
+        encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        y = y - 28
+
+        -- Lazily built from the Encounter Journal on first hover; shared by both zone tooltips.
+        local zoneListCache = nil
+        local function GetZoneList()
+            if zoneListCache then return zoneListCache end
+            local dungeons, raids = {}, {}
+            if EJ_GetNumTiers then
+                local numTiers  = EJ_GetNumTiers()
+                local savedTier = EJ_GetCurrentTier and EJ_GetCurrentTier() or numTiers
+                EJ_SelectTier(numTiers)
+                for pass = 1, 2 do
+                    local inRaid = pass == 2
+                    local target = inRaid and raids or dungeons
+                    local idx    = 1
+                    local id     = EJ_GetInstanceByIndex(idx, inRaid)
+                    while id do
+                        EJ_SelectInstance(id)
+                        local name, _, _, _, _, _, areaMapId = EJ_GetInstanceInfo(id)
+                        if name and areaMapId and areaMapId ~= 0 then
+                            local groupId = C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(areaMapId)
+                            target[#target+1] = { name=name, zoneId=areaMapId, groupId=groupId }
+                        end
+                        idx = idx + 1
+                        id  = EJ_GetInstanceByIndex(idx, inRaid)
+                    end
+                end
+                EJ_SelectTier(savedTier)
+            end
+            zoneListCache = { dungeons=dungeons, raids=raids }
+            return zoneListCache
+        end
+
+        Label(loadCont, 4, y-3, "Zone ID (blank=any):")
+        local zoneIdEB = MakeEB(loadCont, 148, y, 90)
+        zoneIdEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadZoneId = s:GetText() end; s:ClearFocus() end)
+        zoneIdEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadZoneId = s:GetText() end end)
+        zoneIdEB:SetScript("OnEnter", function(self)
+            local mapId   = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+            local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Zone ID  (prefix g for group ID)", 1, 0.82, 0)
+            GameTooltip:AddLine("Plain number = specific zone.  |cffffffffg|r prefix = group (any sub-zone).", 0.8,0.8,0.8, true)
+            GameTooltip:AddLine(" ")
+            if mapId then
+                local cur = "zone " .. tostring(mapId)
+                if groupId then cur = cur .. "   |cffffffffg|r" .. tostring(groupId) end
+                GameTooltip:AddLine("|cff00ff00Current: " .. cur .. "|r")
+                GameTooltip:AddLine(" ")
+            end
+            local zl = GetZoneList()
+            for pass = 1, 2 do
+                local list   = pass == 1 and zl.raids    or zl.dungeons
+                local header = pass == 1 and "Season 1 Raids" or "Season 1 Dungeons"
+                if #list > 0 then
+                    GameTooltip:AddLine("|cffffd100" .. header .. "|r")
+                    for _, entry in ipairs(list) do
+                        local id = entry.groupId and ("|cffffffffg|r" .. tostring(entry.groupId))
+                                                  or tostring(entry.zoneId)
+                        GameTooltip:AddDoubleLine("  " .. entry.name, id, 0.8,0.8,0.8, 1,1,1)
+                    end
+                    GameTooltip:AddLine(" ")
+                end
+            end
+            if not mapId then
+                GameTooltip:AddLine("|cff888888Enter an instance to see current IDs.|r", 0.5,0.5,0.5)
+            end
+            GameTooltip:Show()
+        end)
+        zoneIdEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
         y = y - 28
 
         Label(loadCont, 4, y-4, "Difficulty:")
@@ -1437,8 +2037,191 @@ function BossModModule:BuildUI(parent, db)
         roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
 
         loadCont.Populate = function(e)
-            clsDD.Refresh(); encEB:SetText(e.loadEncId or ""); diffDD.Refresh(); roleDD.Refresh()
+            clsDD.Refresh(); encEB:SetText(e.loadEncId or "")
+            zoneIdEB:SetText(e.loadZoneId or "")
+            diffDD.Refresh(); roleDD.Refresh()
         end
+    end
+
+    -- =============================================
+    -- CONDITIONS TAB
+    -- =============================================
+    do
+        local RULE_H   = 62
+        local RULE_GAP = 4
+
+        local addRuleBtn = CreateFrame("Button", nil, condCont, "UIPanelButtonTemplate")
+        addRuleBtn:SetSize(100, 22)
+        addRuleBtn:SetPoint("TOPLEFT", condCont, "TOPLEFT", 4, -4)
+        addRuleBtn:SetText("+ Add rule")
+
+        local rulesScroll = CreateFrame("ScrollFrame", nil, condCont, "UIPanelScrollFrameTemplate")
+        rulesScroll:SetPoint("TOPLEFT",     addRuleBtn, "BOTTOMLEFT",  0, -4)
+        rulesScroll:SetPoint("BOTTOMRIGHT", condCont,   "BOTTOMRIGHT", -20, 4)
+
+        local rulesChild = CreateFrame("Frame", nil, rulesScroll)
+        rulesChild:SetHeight(1)
+        rulesScroll:SetScrollChild(rulesChild)
+
+        local TRIG_OPTS = {
+            { label="On show",        value="show" },
+            { label="On hide",        value="hide" },
+            { label="Remaining time", value="time" },
+        }
+        local ACT_OPTS = {
+            { label="Glow",       value="glow"      },
+            { label="Play sound", value="sound"     },
+            { label="Scale",      value="scale"     },
+            { label="Bar color",  value="barColor"  },
+            { label="Font color", value="fontColor" },
+            { label="Flash",      value="flash"     },
+        }
+        local GLOW_OPTS = {
+            { label="Pixel",     value="pixel"    },
+            { label="Proc",      value="proc"     },
+            { label="Auto-cast", value="autocast" },
+        }
+        local TIME_OP_OPTS = {
+            { label="less than",    value="lt" },
+            { label="equals",       value="eq" },
+            { label="greater than", value="gt" },
+        }
+
+        local RebuildRules  -- forward-declare for use in rule row closures
+
+        local function MakeRuleRow(parent, cond, onRemove, rw)
+            local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+            row:SetSize(rw, RULE_H)
+            row:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+            row:SetBackdropColor(0.08, 0.08, 0.08, 1)
+            row:SetBackdropBorderColor(0.22, 0.22, 0.22, 1)
+
+            -- Forward-declare UpdateVis so setter closures below can capture it
+            local UpdateVis
+
+            -- ---- IF row ----
+            local ifLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            ifLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -8)
+            ifLbl:SetText("IF"); ifLbl:SetTextColor(0.8, 0.8, 0.5)
+
+            local trigDD = ScrollDrop(row, 130, TRIG_OPTS,
+                function() return cond.trigger or "show" end,
+                function(v) cond.trigger = v; UpdateVis() end)
+            trigDD:SetPoint("TOPLEFT", row, "TOPLEFT", 36, -4)
+
+            local timeOpDD = ScrollDrop(row, 104, TIME_OP_OPTS,
+                function() return cond.timeOp or "lt" end,
+                function(v) cond.timeOp = v end)
+            timeOpDD:SetPoint("TOPLEFT", row, "TOPLEFT", 174, -4)
+
+            local timeValEB = MakeEB(row, 284, -4, 50, true)
+            timeValEB:SetText(tostring(cond.timeVal or 5))
+            timeValEB:SetScript("OnEnterPressed",  function(s) cond.timeVal = tonumber(s:GetText()) or 5; s:ClearFocus() end)
+            timeValEB:SetScript("OnEditFocusLost", function(s) cond.timeVal = tonumber(s:GetText()) or 5 end)
+
+            local sLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            sLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 340, -8); sLbl:SetText("s")
+
+            -- ---- THEN row ----
+            local thenLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            thenLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -36)
+            thenLbl:SetText("THEN"); thenLbl:SetTextColor(0.8, 0.8, 0.5)
+
+            local actDD = ScrollDrop(row, 130, ACT_OPTS,
+                function() return cond.action or "glow" end,
+                function(v) cond.action = v; UpdateVis() end)
+            actDD:SetPoint("TOPLEFT", row, "TOPLEFT", 50, -32)
+
+            local glowDD = ScrollDrop(row, 100, GLOW_OPTS,
+                function() return cond.glowType or "pixel" end,
+                function(v) cond.glowType = v end)
+            glowDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
+
+            local soundList = GetSoundList()
+            local soundDD
+            if #soundList > 0 then
+                soundDD = ScrollDrop(row, 180, soundList,
+                    function() return cond.soundName or soundList[1] end,
+                    function(v) cond.soundName = v; local p = GetSoundPath(v); if p then PlaySoundFile(p, "Master") end end)
+                soundDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
+            else
+                local noSndLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                noSndLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -36)
+                noSndLbl:SetText("(no LSM sounds)"); noSndLbl:SetTextColor(0.5, 0.5, 0.5)
+                soundDD = { SetShown = function(self, v) if v then noSndLbl:Show() else noSndLbl:Hide() end end }
+            end
+
+            local scaleEB = MakeEB(row, 188, -32, 54, false)
+            scaleEB:SetText(tostring(cond.scaleVal or 1.5))
+            scaleEB:SetScript("OnEnterPressed",  function(s) cond.scaleVal = tonumber(s:GetText()) or 1.5; s:ClearFocus() end)
+            scaleEB:SetScript("OnEditFocusLost", function(s) cond.scaleVal = tonumber(s:GetText()) or 1.5 end)
+            local scaleLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            scaleLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 248, -36); scaleLbl:SetText("x scale")
+
+            local bcSwatch = Swatch(row,
+                function() return cond.bcR or 1 end, function() return cond.bcG or 0 end,
+                function() return cond.bcB or 0 end, function() return cond.bcA or 1 end,
+                function(r,g,b,a) cond.bcR,cond.bcG,cond.bcB,cond.bcA = r,g,b,a end)
+            bcSwatch:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -31)
+
+            local fcSwatch = Swatch(row,
+                function() return cond.fcR or 1 end, function() return cond.fcG or 1 end,
+                function() return cond.fcB or 0 end, function() return cond.fcA or 1 end,
+                function(r,g,b,a) cond.fcR,cond.fcG,cond.fcB,cond.fcA = r,g,b,a end)
+            fcSwatch:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -31)
+
+            -- ---- Remove button ----
+            local rmBtn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+            rmBtn:SetSize(58, 20); rmBtn:SetText("Remove")
+            rmBtn:SetPoint("TOPRIGHT", row, "TOPRIGHT", -4, -4)
+            rmBtn:SetScript("OnClick", onRemove)
+
+            -- ---- Visibility (defined after all widgets so closures above work) ----
+            UpdateVis = function()
+                local isTime = (cond.trigger or "show") == "time"
+                timeOpDD:SetShown(isTime); timeValEB:SetShown(isTime); sLbl:SetShown(isTime)
+                local act = cond.action or "glow"
+                glowDD:SetShown(act == "glow")
+                soundDD:SetShown(act == "sound")
+                scaleEB:SetShown(act == "scale"); scaleLbl:SetShown(act == "scale")
+                bcSwatch:SetShown(act == "barColor")
+                fcSwatch:SetShown(act == "fontColor")
+            end
+            UpdateVis()
+
+            return row
+        end
+
+        RebuildRules = function(e)
+            for _, c in ipairs({ rulesChild:GetChildren() }) do c:Hide() end
+            if not e or not e.conditions or #e.conditions == 0 then
+                rulesChild:SetHeight(1); return
+            end
+            local rw = math.max(200, condCont:GetWidth() - 24)
+            rulesChild:SetWidth(rw)
+            for ri, cond in ipairs(e.conditions) do
+                local ci = ri
+                local row = MakeRuleRow(rulesChild, cond, function()
+                    table.remove(e.conditions, ci)
+                    RebuildRules(e)
+                end, rw)
+                row:SetPoint("TOPLEFT", rulesChild, "TOPLEFT", 0, -(ri-1)*(RULE_H+RULE_GAP))
+                row:Show()
+            end
+            rulesChild:SetHeight(#e.conditions * (RULE_H + RULE_GAP))
+        end
+
+        condCont.Populate = function(e)
+            if not e.conditions then e.conditions = {} end
+            RebuildRules(e)
+        end
+
+        addRuleBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            if not ref.e.conditions then ref.e.conditions = {} end
+            table.insert(ref.e.conditions, { trigger="show", action="glow", glowType="pixel", timeOp="lt", timeVal=5 })
+            RebuildRules(ref.e)
+        end)
     end
 
     -- =============================================
@@ -1520,9 +2303,11 @@ function BossModModule:BuildUI(parent, db)
 
         -- Display tab sections
         iconSec:SetShown(e.type == "icon")
+        textSec:SetShown(e.type == "text")
         barSec:SetShown(e.type == "bar")
         grpSec:SetShown(e.type == "group")
         if e.type == "icon"  then iconSec.Populate(e) end
+        if e.type == "text"  then textSec.Populate(e) end
         if e.type == "bar"   then barSec.Populate(e) end
         if e.type == "group" then
             grpSec.Populate(e)
@@ -1589,13 +2374,15 @@ function BossModModule:BuildUI(parent, db)
             previewId = e.id
         end
 
-        -- Groups have no trigger or load conditions — hide those tabs
+        -- Groups have no trigger, load, or conditions tabs
         local isGroup = e.type == "group"
         subBtns[2]:SetShown(not isGroup)
         subBtns[3]:SetShown(not isGroup)
+        subBtns[4]:SetShown(not isGroup)
         if not isGroup then
             trigCont.Populate(e)
             loadCont.Populate(e)
+            condCont.Populate(e)
         end
         PickSub(isGroup and 1 or activeSub)
     end
@@ -1605,6 +2392,27 @@ function BossModModule:BuildUI(parent, db)
     -- =============================================
 
     local rowPool = {}
+
+    local TYPE_LABELS = { icon="Icon", bar="Progress bar", text="Text", group="" }
+
+    local function GetEntryIcon(e)
+        if e.type == "group" then
+            return "Interface\\AddOns\\AndeReminders\\Media\\group-icon.tga"
+        end
+        if e.iconOverrideId and e.iconOverrideId ~= "" then
+            return tonumber(e.iconOverrideId) or e.iconOverrideId
+        end
+        local spellId = (e.annSpellId ~= "" and e.annSpellId) or (e.tmrSpellId ~= "" and e.tmrSpellId)
+        if spellId and spellId ~= "" then
+            local sid = tonumber(spellId)
+            if sid then
+                local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
+                       or (GetSpellTexture and GetSpellTexture(sid))
+                if t then return t end
+            end
+        end
+        return "Interface\\Icons\\inv_misc_questionmark"
+    end
 
     RefreshSidebar = function()
         for _, r in ipairs(rowPool) do r:Hide() end
@@ -1616,8 +2424,19 @@ function BossModModule:BuildUI(parent, db)
                 local r = CreateFrame("Button", nil, scrollChild, "BackdropTemplate")
                 r:RegisterForClicks("LeftButtonUp", "RightButtonUp")
                 r:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
-                r.label = r:CreateFontString(nil,"OVERLAY","GameFontNormal")
-                r.label:SetPoint("LEFT",r,"LEFT",6,0); r.label:SetPoint("RIGHT",r,"RIGHT",-4,0); r.label:SetJustifyH("LEFT")
+                r.icon = r:CreateTexture(nil, "ARTWORK")
+                r.icon:SetSize(40, 40)
+                r.icon:SetPoint("LEFT", r, "LEFT", 2, 0)
+                r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+                r.label = r:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                r.label:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 4, -2)
+                r.label:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.label:SetJustifyH("LEFT")
+                r.typeLabel = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+                r.typeLabel:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 4, 2)
+                r.typeLabel:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.typeLabel:SetJustifyH("LEFT")
+                r.typeLabel:SetTextColor(0.6, 0.6, 0.6)
                 r:SetScript("OnEnter", function(s)
                     if not ref.e or ref.e.id ~= s.eid then
                         s:SetBackdropColor(s.isGroup and 0.14 or 0.1, s.isGroup and 0.14 or 0.1, 0.22, 1)
@@ -1641,9 +2460,10 @@ function BossModModule:BuildUI(parent, db)
             local idleBg   = r.isGroup and 0.10 or 0.05
             r:SetBackdropColor(active and 0.1 or idleBg, active and 0.22 or idleBg, active and 0.55 or idleBg, 1)
             r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
-            local pfx = (e.type=="group") and (groupExpanded[e.id] and "[-] " or "[+] ")
-                      or (e.type=="bar" and "[=] " or "[T] ")
-            r.label:SetText(pfx .. (e.name or "?"))
+            r.icon:SetTexture(GetEntryIcon(e))
+            local namePfx = (e.type == "group") and (groupExpanded[e.id] and "[-] " or "[+] ") or ""
+            r.label:SetText(namePfx .. (e.name or "?"))
+            r.typeLabel:SetText(TYPE_LABELS[e.type] or "")
             r:Show()
             if e.type == "group" then
                 r:SetScript("OnClick", function(_, btn)
