@@ -58,6 +58,7 @@ local EDEFS = {
     tmrSpellId="", tmrText="",  tmrTextOp="find", tmrCount="", tmrRemaining="",
     trigStage    = "",
     loadClass="", loadEncId="", loadDiff="", loadRole="",
+    loadZoneId="", loadZoneGroupId="",
 }
 
 local function ApplyDefs(e)
@@ -177,6 +178,15 @@ local function PassesLoad(e)
         local role = UnitGroupRolesAssigned("player")
         if role == "NONE" then role = GetSpecializationRole(GetSpecialization()) end
         if role ~= e.loadRole then return false end
+    end
+    if e.loadZoneId ~= "" then
+        local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+        if tostring(mapId) ~= e.loadZoneId then return false end
+    end
+    if e.loadZoneGroupId ~= "" then
+        local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+        local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
+        if tostring(groupId) ~= e.loadZoneGroupId then return false end
     end
     return true
 end
@@ -1911,6 +1921,79 @@ function BossModModule:BuildUI(parent, db)
         local encEB = MakeEB(loadCont, 178, y, 90)
         encEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadEncId = s:GetText() end; s:ClearFocus() end)
         encEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadEncId = s:GetText() end end)
+        encEB:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Midnight Season 1 Encounter IDs", 1, 0.82, 0)
+            GameTooltip:AddLine("|cffffd100The Voidspire|r")
+            GameTooltip:AddDoubleLine("  Imperator Averzian",   "3176", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Vorasius",              "3177", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Vaelgor & Ezzorak",     "3178", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Fallen-King Salhadaar", "3179", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Lightblinded Vanguard", "3180", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Crown of the Cosmos",   "3181", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100March on Quel'Danas|r")
+            GameTooltip:AddDoubleLine("  Belo'ren, Child of Al'ar", "3182", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddDoubleLine("  Midnight Falls",            "3183", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100Sporefall|r")
+            GameTooltip:AddDoubleLine("  Rotmire",   "3159", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100The Dreamrift|r")
+            GameTooltip:AddDoubleLine("  Chimaerus", "3306", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:Show()
+        end)
+        encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        y = y - 28
+
+        local function ShowZoneTooltip(owner)
+            local mapId   = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+            local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
+            GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Midnight Season 1 Zone IDs", 1, 0.82, 0)
+            if mapId then
+                GameTooltip:AddLine("|cff00ff00Current: zone " .. tostring(mapId)
+                    .. (groupId and ("  group " .. tostring(groupId)) or "") .. "|r")
+                GameTooltip:AddLine(" ")
+            end
+            GameTooltip:AddLine("|cffffd100The Voidspire|r")
+            GameTooltip:AddDoubleLine("  Zone", "2912", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100March on Quel'Danas|r")
+            GameTooltip:AddDoubleLine("  Zone", "2913", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100The Dreamrift|r")
+            GameTooltip:AddDoubleLine("  Zone", "2939", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine("|cffffd100Sporefall|r")
+            GameTooltip:AddDoubleLine("  Zone", "1592", 0.8,0.8,0.8, 1,1,1)
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine("|cff888888Enter an instance and hover to see current IDs.|r", 0.5,0.5,0.5)
+            GameTooltip:Show()
+        end
+
+        Label(loadCont, 4, y-3, "Zone ID (blank=any):")
+        local zoneIdEB = MakeEB(loadCont, 148, y, 90)
+        zoneIdEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadZoneId = s:GetText() end; s:ClearFocus() end)
+        zoneIdEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadZoneId = s:GetText() end end)
+        zoneIdEB:SetScript("OnEnter", function(self) ShowZoneTooltip(self) end)
+        zoneIdEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        y = y - 28
+
+        Label(loadCont, 4, y-3, "Zone Group ID (blank=any):")
+        local zoneGroupIdEB = MakeEB(loadCont, 178, y, 90)
+        zoneGroupIdEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadZoneGroupId = s:GetText() end; s:ClearFocus() end)
+        zoneGroupIdEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadZoneGroupId = s:GetText() end end)
+        zoneGroupIdEB:SetScript("OnEnter", function(self)
+            local mapId   = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+            local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Zone Group ID", 1, 0.82, 0)
+            GameTooltip:AddLine("Matches any sub-zone within the same instance group.", 0.8,0.8,0.8, true)
+            GameTooltip:AddLine("Useful for dungeons or raids with multiple floors/wings.", 0.8,0.8,0.8, true)
+            GameTooltip:AddLine(" ")
+            if groupId then
+                GameTooltip:AddLine("|cff00ff00Current group: " .. tostring(groupId) .. "|r")
+            else
+                GameTooltip:AddLine("|cff888888Enter an instance to see current group ID.|r", 0.5,0.5,0.5)
+            end
+            GameTooltip:Show()
+        end)
+        zoneGroupIdEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
         y = y - 28
 
         Label(loadCont, 4, y-4, "Difficulty:")
@@ -1936,7 +2019,9 @@ function BossModModule:BuildUI(parent, db)
         roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
 
         loadCont.Populate = function(e)
-            clsDD.Refresh(); encEB:SetText(e.loadEncId or ""); diffDD.Refresh(); roleDD.Refresh()
+            clsDD.Refresh(); encEB:SetText(e.loadEncId or "")
+            zoneIdEB:SetText(e.loadZoneId or ""); zoneGroupIdEB:SetText(e.loadZoneGroupId or "")
+            diffDD.Refresh(); roleDD.Refresh()
         end
     end
 
