@@ -465,12 +465,7 @@ local function LayoutIconFrame(f, e, data)
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
     local resolvedIcon = data.icon
     if e.iconOverrideId and e.iconOverrideId ~= "" then
-        local sid = tonumber(e.iconOverrideId)
-        if sid then
-            local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                   or (GetSpellTexture and GetSpellTexture(sid))
-            if t then resolvedIcon = t end
-        end
+        resolvedIcon = tonumber(e.iconOverrideId) or e.iconOverrideId
     end
     local showIcon = e.iconEnabled and resolvedIcon
     if showIcon then
@@ -556,11 +551,15 @@ local function LayoutBarFrame(f, e, data)
     f.expTime = data.expirationTime; f.dur = data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
-    local isz      = bh
-    local showIcon = e.iconEnabled and data.icon
+    local isz = bh
+    local resolvedBarIcon = data.icon
+    if e.iconOverrideId and e.iconOverrideId ~= "" then
+        resolvedBarIcon = tonumber(e.iconOverrideId) or e.iconOverrideId
+    end
+    local showIcon = e.iconEnabled and resolvedBarIcon
     f.bar:ClearAllPoints(); f.icon:ClearAllPoints()
     if showIcon then
-        f.icon:SetTexture(data.icon); f.icon:SetSize(isz, isz); f.icon:Show()
+        f.icon:SetTexture(resolvedBarIcon); f.icon:SetSize(isz, isz); f.icon:Show()
         f.icon:SetPoint("LEFT", f, "LEFT")
         f.bar:SetPoint("LEFT", f.icon, "RIGHT", 0, 0)
         f.bar:SetSize(bw - isz, bh)
@@ -901,6 +900,186 @@ local function Divider(parent, y)
 end
 
 -- =============================================================================
+-- Icon Picker
+-- =============================================================================
+
+local iconPickerFrame = nil
+local iconPickerCb    = nil
+local allIconPaths    = nil  -- cached; built once on first open
+
+local IC_SIZE     = 36
+local IC_CELL     = 40   -- icon + 2px margin each side
+local IC_COLS     = 13
+local IC_ROWS_VIS = 11
+local IC_POOL     = IC_COLS * (IC_ROWS_VIS + 2)
+local IC_GRID_H   = IC_ROWS_VIS * IC_CELL  -- used for max-scroll calculation
+
+local function BuildIconPicker()
+    local W, H = 600, 520
+    local f = CreateFrame("Frame", "ARIconPickerFrame", UIParent, "BackdropTemplate")
+    f:SetSize(W, H); f:SetPoint("CENTER", UIParent, "CENTER")
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetMovable(true); f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetBackdrop({
+        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
+        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
+        edgeSize = 24, tile = true, tileSize = 32,
+        insets   = { left=6, right=6, top=6, bottom=6 },
+    })
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", f, "TOP", 0, -14); title:SetText("Choose Icon")
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    local searchLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    searchLbl:SetPoint("TOPLEFT", f, "TOPLEFT", 14, -44); searchLbl:SetText("Search:")
+    local searchEB = CreateFrame("EditBox", nil, f, "InputBoxTemplate")
+    searchEB:SetSize(280, 20); searchEB:SetPoint("LEFT", searchLbl, "RIGHT", 6, 0)
+    searchEB:SetAutoFocus(false)
+
+    local statusLbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    statusLbl:SetPoint("LEFT", searchEB, "RIGHT", 12, 0)
+    statusLbl:SetTextColor(0.6, 0.6, 0.6)
+
+    -- Grid area (clipped so icons outside bounds are invisible)
+    local gridFrame = CreateFrame("Frame", nil, f)
+    gridFrame:SetPoint("TOPLEFT",     f, "TOPLEFT",      8, -70)
+    gridFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -26,   8)
+    gridFrame:SetClipsChildren(true)
+
+    -- Scrollbar
+    local sb = CreateFrame("Slider", nil, f)
+    sb:SetOrientation("VERTICAL"); sb:SetWidth(16)
+    sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -6, -70)
+    sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6,   8)
+    local sbBg = sb:CreateTexture(nil, "BACKGROUND"); sbBg:SetAllPoints(); sbBg:SetColorTexture(0,0,0,0.3)
+    local sbTh = sb:CreateTexture(nil, "OVERLAY")
+    sbTh:SetTexture("Interface/Buttons/UI-ScrollBar-Knob"); sbTh:SetSize(16,16)
+    sb:SetThumbTexture(sbTh); sb:SetMinMaxValues(0,0); sb:SetValue(0)
+
+    -- Button pool (only visible rows are positioned + shown)
+    local pool = {}
+    for i = 1, IC_POOL do
+        local btn = CreateFrame("Button", nil, gridFrame)
+        btn:SetSize(IC_SIZE, IC_SIZE)
+        local tex = btn:CreateTexture(nil, "ARTWORK")
+        tex:SetAllPoints(); tex:SetTexCoord(0.07, 0.93, 0.07, 0.93); btn.tex = tex
+        local hl  = btn:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.25)
+        local sel = btn:CreateTexture(nil, "OVERLAY")
+        sel:SetAllPoints(); sel:SetColorTexture(1, 0.8, 0, 0.4); sel:Hide(); btn.selTex = sel
+        btn:Hide(); pool[i] = btn
+    end
+
+    local filteredIcons = {}
+    local scrollOffset  = 0
+    local selectedPath  = nil
+
+    local function UpdateGrid()
+        for i = 1, #pool do pool[i]:Hide() end
+        local firstRow = math.floor(scrollOffset / IC_CELL)
+        local lastRow  = firstRow + IC_ROWS_VIS + 1
+        local pi = 0
+        for iconIdx = firstRow * IC_COLS + 1, math.min((lastRow + 1) * IC_COLS, #filteredIcons) do
+            pi = pi + 1; if pi > #pool then break end
+            local btn = pool[pi]
+            local row = math.floor((iconIdx - 1) / IC_COLS)
+            local col = (iconIdx - 1) % IC_COLS
+            btn:ClearAllPoints()
+            btn:SetPoint("TOPLEFT", gridFrame, "TOPLEFT", col * IC_CELL, -(row * IC_CELL - scrollOffset))
+            btn.iconPath = filteredIcons[iconIdx]
+            btn.tex:SetTexture(filteredIcons[iconIdx])
+            btn.selTex:SetShown(filteredIcons[iconIdx] == selectedPath)
+            btn:Show()
+        end
+    end
+
+    local searchTimer = nil
+    local function RebuildFiltered(query)
+        filteredIcons = {}
+        query = query and query:lower() or ""
+        if allIconPaths then
+            if query == "" then
+                for _, v in ipairs(allIconPaths) do filteredIcons[#filteredIcons+1] = v end
+            else
+                for _, v in ipairs(allIconPaths) do
+                    if v:lower():find(query, 1, true) then filteredIcons[#filteredIcons+1] = v end
+                end
+            end
+        end
+        local totalH    = math.ceil(#filteredIcons / IC_COLS) * IC_CELL
+        local maxScroll = math.max(0, totalH - IC_GRID_H)
+        sb:SetMinMaxValues(0, maxScroll); sb:SetValue(0)
+        scrollOffset = 0
+        statusLbl:SetText(#filteredIcons .. " icons")
+        UpdateGrid()
+    end
+
+    sb:SetScript("OnValueChanged", function(_, v) scrollOffset = v; UpdateGrid() end)
+    gridFrame:EnableMouseWheel(true)
+    gridFrame:SetScript("OnMouseWheel", function(_, d)
+        local mn, mx = sb:GetMinMaxValues()
+        sb:SetValue(math.max(mn, math.min(mx, sb:GetValue() - d * IC_CELL * 3)))
+    end)
+
+    for i = 1, #pool do
+        pool[i]:SetScript("OnClick", function(self)
+            if self.iconPath and iconPickerCb then
+                iconPickerCb(self.iconPath)
+                selectedPath = self.iconPath
+                UpdateGrid()
+            end
+        end)
+        pool[i]:SetScript("OnEnter", function(self)
+            if self.iconPath then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                local name = self.iconPath:match("[^\\/]+$") or self.iconPath
+                GameTooltip:SetText(name, 1, 1, 1, 1, true); GameTooltip:Show()
+            end
+        end)
+        pool[i]:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    searchEB:SetScript("OnTextChanged", function(self)
+        if searchTimer then searchTimer:Cancel(); searchTimer = nil end
+        searchTimer = C_Timer.NewTimer(0.3, function()
+            searchTimer = nil; RebuildFiltered(self:GetText())
+        end)
+    end)
+
+    f.Reopen = function(currentPath)
+        selectedPath = currentPath
+        if not allIconPaths then
+            allIconPaths = {}
+            local n = GetNumMacroIcons and GetNumMacroIcons() or 0
+            for i = 1, n do
+                local p = GetMacroIconInfo and GetMacroIconInfo(i)
+                if p and p ~= "" then allIconPaths[#allIconPaths+1] = p end
+            end
+        end
+        searchEB:SetText(""); searchEB:SetFocus()
+        RebuildFiltered("")
+    end
+
+    f:Hide()
+    iconPickerFrame = f
+end
+
+local function ShowIconPicker(callback, currentPath)
+    iconPickerCb = callback
+    if not iconPickerFrame then BuildIconPicker() end
+    iconPickerFrame.Reopen(currentPath)
+    iconPickerFrame:Show()
+end
+
+-- =============================================================================
 -- BuildUI
 -- =============================================================================
 
@@ -1119,42 +1298,38 @@ function BossModModule:BuildUI(parent, db)
         local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
         ovrTex:SetSize(20, 20); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
         ovrTex:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 100, y-1); ovrTex:SetAlpha(0.2)
-        local ovrEB = MakeEB(iconSec, 124, y, 180)
+        local ovrEB = MakeEB(iconSec, 124, y, 120)
+        local ovrChooseBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
+        ovrChooseBtn:SetSize(60, 20); ovrChooseBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrChooseBtn:SetText("Choose")
         local ovrClearBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
-        ovrClearBtn:SetSize(48, 20); ovrClearBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrClearBtn:SetText("Clear")
+        ovrClearBtn:SetSize(48, 20); ovrClearBtn:SetPoint("LEFT", ovrChooseBtn, "RIGHT", 4, 0); ovrClearBtn:SetText("Clear")
         local ovrHint = iconSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         ovrHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
-        ovrHint:SetText("Spell name or ID  —  blank = use the BW/DBM icon")
+        ovrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
         ovrHint:SetTextColor(0.5, 0.5, 0.5)
         local function ApplyOvrInput()
             if not ref.e then return end
             local txt = ovrEB:GetText()
+            ref.e.iconOverrideId = txt
             if txt == "" then
-                ref.e.iconOverrideId = ""; ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
-                RefreshPreview(); return
-            end
-            local sid = tonumber(txt)
-            local tex, resolvedId
-            if sid then
-                tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                   or (GetSpellTexture and GetSpellTexture(sid))
-                resolvedId = sid
+                ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
             else
-                if GetSpellInfo then
-                    local _, _, icon, _, _, _, spellId = GetSpellInfo(txt)
-                    if icon and spellId then tex = icon; resolvedId = spellId; ovrEB:SetText(tostring(spellId)) end
-                end
-            end
-            if tex and resolvedId then
-                ref.e.iconOverrideId = tostring(resolvedId)
-                ovrTex:SetTexture(tex); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
-            else
-                ref.e.iconOverrideId = ""; ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
+                local texVal = tonumber(txt) or txt
+                ovrTex:SetTexture(texVal); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
             end
             RefreshPreview()
         end
         ovrEB:SetScript("OnEnterPressed", function(s) s:ClearFocus(); ApplyOvrInput() end)
         ovrEB:SetScript("OnEditFocusLost", ApplyOvrInput)
+        ovrChooseBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            ShowIconPicker(function(path)
+                ref.e.iconOverrideId = path
+                ovrEB:SetText(path)
+                ovrTex:SetTexture(path); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
+                RefreshPreview()
+            end, ref.e.iconOverrideId)
+        end)
         ovrClearBtn:SetScript("OnClick", function() ovrEB:SetText(""); ApplyOvrInput() end)
         y = y - 44
 
@@ -1203,12 +1378,9 @@ function BossModModule:BuildUI(parent, db)
         iconSec.Populate = function(e)
             isizeEB:SetText(tostring(e.iconSize or 32))
             ovrEB:SetText(e.iconOverrideId or "")
-            local osid = tonumber(e.iconOverrideId or "")
-            if osid then
-                local otex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(osid))
-                          or (GetSpellTexture and GetSpellTexture(osid))
-                if otex then ovrTex:SetTexture(otex); ovrTex:SetTexCoord(0.07,0.93,0.07,0.93); ovrTex:SetAlpha(1)
-                else ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2) end
+            if e.iconOverrideId and e.iconOverrideId ~= "" then
+                local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
+                ovrTex:SetTexture(texVal); ovrTex:SetTexCoord(0.07,0.93,0.07,0.93); ovrTex:SetAlpha(1)
             else
                 ovrTex:SetTexture(nil); ovrTex:SetAlpha(0.2)
             end
@@ -1307,6 +1479,45 @@ function BossModModule:BuildUI(parent, db)
         cbHT:SetScript("OnClick", function(s) if ref.e then ref.e.barHideTimer = s:GetChecked(); RefreshPreview() end end)
         y = y - 28
 
+        Label(barSec, 4, y-3, "Override icon:")
+        local barOvrTex = barSec:CreateTexture(nil, "ARTWORK")
+        barOvrTex:SetSize(20, 20); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        barOvrTex:SetPoint("TOPLEFT", barSec, "TOPLEFT", 100, y-1); barOvrTex:SetAlpha(0.2)
+        local barOvrEB = MakeEB(barSec, 124, y, 120)
+        local barOvrChooseBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
+        barOvrChooseBtn:SetSize(60, 20); barOvrChooseBtn:SetPoint("LEFT", barOvrEB, "RIGHT", 4, 0); barOvrChooseBtn:SetText("Choose")
+        local barOvrClearBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
+        barOvrClearBtn:SetSize(48, 20); barOvrClearBtn:SetPoint("LEFT", barOvrChooseBtn, "RIGHT", 4, 0); barOvrClearBtn:SetText("Clear")
+        local barOvrHint = barSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        barOvrHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
+        barOvrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
+        barOvrHint:SetTextColor(0.5, 0.5, 0.5)
+        local function ApplyBarOvrInput()
+            if not ref.e then return end
+            local txt = barOvrEB:GetText()
+            ref.e.iconOverrideId = txt
+            if txt == "" then
+                barOvrTex:SetTexture(nil); barOvrTex:SetAlpha(0.2)
+            else
+                local texVal = tonumber(txt) or txt
+                barOvrTex:SetTexture(texVal); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); barOvrTex:SetAlpha(1)
+            end
+            RefreshPreview()
+        end
+        barOvrEB:SetScript("OnEnterPressed", function(s) s:ClearFocus(); ApplyBarOvrInput() end)
+        barOvrEB:SetScript("OnEditFocusLost", ApplyBarOvrInput)
+        barOvrChooseBtn:SetScript("OnClick", function()
+            if not ref.e then return end
+            ShowIconPicker(function(path)
+                ref.e.iconOverrideId = path
+                barOvrEB:SetText(path)
+                barOvrTex:SetTexture(path); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); barOvrTex:SetAlpha(1)
+                RefreshPreview()
+            end, ref.e.iconOverrideId)
+        end)
+        barOvrClearBtn:SetScript("OnClick", function() barOvrEB:SetText(""); ApplyBarOvrInput() end)
+        y = y - 44
+
         Divider(barSec, y); y = y - 14
         Label(barSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
 
@@ -1354,6 +1565,13 @@ function BossModModule:BuildUI(parent, db)
             bhEB:SetText(tostring(e.barHeight or 22))
             cbBI:SetChecked(e.iconEnabled)
             cbHT:SetChecked(e.barHideTimer or false)
+            barOvrEB:SetText(e.iconOverrideId or "")
+            if e.iconOverrideId and e.iconOverrideId ~= "" then
+                local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
+                barOvrTex:SetTexture(texVal); barOvrTex:SetTexCoord(0.07,0.93,0.07,0.93); barOvrTex:SetAlpha(1)
+            else
+                barOvrTex:SetTexture(nil); barOvrTex:SetAlpha(0.2)
+            end
             bfDD.Refresh()
             bfsEB:SetText(tostring(e.barFontSize or 12))
             btcSwatch.Refresh(); btpDD.Refresh()
@@ -2021,12 +2239,7 @@ function BossModModule:BuildUI(parent, db)
             return "Interface\\AddOns\\AndeReminders\\Media\\group-icon.tga"
         end
         if e.iconOverrideId and e.iconOverrideId ~= "" then
-            local sid = tonumber(e.iconOverrideId)
-            if sid then
-                local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                       or (GetSpellTexture and GetSpellTexture(sid))
-                if t then return t end
-            end
+            return tonumber(e.iconOverrideId) or e.iconOverrideId
         end
         local spellId = (e.annSpellId ~= "" and e.annSpellId) or (e.tmrSpellId ~= "" and e.tmrSpellId)
         if spellId and spellId ~= "" then
