@@ -1058,10 +1058,26 @@ local function BuildIconPicker()
         selectedPath = currentPath
         if not allIconPaths then
             allIconPaths = {}
+            local seen = {}
+            -- GetMacroIconInfo returns (path/fileID, isAtlas). Atlas icons need
+            -- SetAtlas, not SetTexture, so we skip them here.
             local n = GetNumMacroIcons and GetNumMacroIcons() or 0
             for i = 1, n do
-                local p = GetMacroIconInfo and GetMacroIconInfo(i)
-                if p and p ~= "" then allIconPaths[#allIconPaths+1] = p end
+                local p, isAtlas = GetMacroIconInfo and GetMacroIconInfo(i)
+                if p and p ~= "" and not isAtlas then
+                    if not seen[p] then seen[p] = true; allIconPaths[#allIconPaths+1] = p end
+                end
+            end
+            -- Fallback: derive icons from spell textures if the macro API gave nothing
+            -- (happens when all macro icons are atlas-based in this client version).
+            if #allIconPaths == 0 then
+                for spellId = 1, 50000 do
+                    local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(spellId))
+                             or (GetSpellTexture and GetSpellTexture(spellId))
+                    if tex and not seen[tex] then
+                        seen[tex] = true; allIconPaths[#allIconPaths+1] = tex
+                    end
+                end
             end
         end
         searchEB:SetText(""); searchEB:SetFocus()
