@@ -1943,34 +1943,68 @@ function BossModModule:BuildUI(parent, db)
         encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
         y = y - 28
 
-        local function ShowZoneTooltip(owner)
-            local mapId   = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
-            local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
-            GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Midnight Season 1 Zone IDs", 1, 0.82, 0)
-            if mapId then
-                GameTooltip:AddLine("|cff00ff00Current: zone " .. tostring(mapId)
-                    .. (groupId and ("  group " .. tostring(groupId)) or "") .. "|r")
-                GameTooltip:AddLine(" ")
+        -- Lazily built from the Encounter Journal on first hover; shared by both zone tooltips.
+        local zoneListCache = nil
+        local function GetZoneList()
+            if zoneListCache then return zoneListCache end
+            local dungeons, raids = {}, {}
+            if EJ_GetNumTiers then
+                local numTiers  = EJ_GetNumTiers()
+                local savedTier = EJ_GetCurrentTier and EJ_GetCurrentTier() or numTiers
+                EJ_SelectTier(numTiers)
+                for pass = 1, 2 do
+                    local inRaid = pass == 2
+                    local target = inRaid and raids or dungeons
+                    local idx    = 1
+                    local id     = EJ_GetInstanceByIndex(idx, inRaid)
+                    while id do
+                        EJ_SelectInstance(id)
+                        local name, _, _, _, _, _, areaMapId = EJ_GetInstanceInfo(id)
+                        if name and areaMapId and areaMapId ~= 0 then
+                            local groupId = C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(areaMapId)
+                            target[#target+1] = { name=name, zoneId=areaMapId, groupId=groupId }
+                        end
+                        idx = idx + 1
+                        id  = EJ_GetInstanceByIndex(idx, inRaid)
+                    end
+                end
+                EJ_SelectTier(savedTier)
             end
-            GameTooltip:AddLine("|cffffd100The Voidspire|r")
-            GameTooltip:AddDoubleLine("  Zone", "2912", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100March on Quel'Danas|r")
-            GameTooltip:AddDoubleLine("  Zone", "2913", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100The Dreamrift|r")
-            GameTooltip:AddDoubleLine("  Zone", "2939", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100Sporefall|r")
-            GameTooltip:AddDoubleLine("  Zone", "1592", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine(" ")
-            GameTooltip:AddLine("|cff888888Enter an instance and hover to see current IDs.|r", 0.5,0.5,0.5)
-            GameTooltip:Show()
+            zoneListCache = { dungeons=dungeons, raids=raids }
+            return zoneListCache
         end
 
         Label(loadCont, 4, y-3, "Zone ID (blank=any):")
         local zoneIdEB = MakeEB(loadCont, 148, y, 90)
         zoneIdEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadZoneId = s:GetText() end; s:ClearFocus() end)
         zoneIdEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadZoneId = s:GetText() end end)
-        zoneIdEB:SetScript("OnEnter", function(self) ShowZoneTooltip(self) end)
+        zoneIdEB:SetScript("OnEnter", function(self)
+            local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Zone ID  (C_Map zone map ID)", 1, 0.82, 0)
+            if mapId then
+                GameTooltip:AddLine("|cff00ff00Current zone: " .. tostring(mapId) .. "|r")
+                GameTooltip:AddLine(" ")
+            end
+            local zl = GetZoneList()
+            if #zl.raids > 0 then
+                GameTooltip:AddLine("|cffffd100Season 1 Raids|r")
+                for _, e in ipairs(zl.raids) do
+                    GameTooltip:AddDoubleLine("  " .. e.name, tostring(e.zoneId), 0.8,0.8,0.8, 1,1,1)
+                end
+                GameTooltip:AddLine(" ")
+            end
+            if #zl.dungeons > 0 then
+                GameTooltip:AddLine("|cffffd100Season 1 Dungeons|r")
+                for _, e in ipairs(zl.dungeons) do
+                    GameTooltip:AddDoubleLine("  " .. e.name, tostring(e.zoneId), 0.8,0.8,0.8, 1,1,1)
+                end
+            end
+            if not mapId then
+                GameTooltip:AddLine("|cff888888Enter an instance to see your current zone ID.|r", 0.5,0.5,0.5)
+            end
+            GameTooltip:Show()
+        end)
         zoneIdEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
         y = y - 28
 
@@ -1982,14 +2016,36 @@ function BossModModule:BuildUI(parent, db)
             local mapId   = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
             local groupId = mapId and C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(mapId)
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Zone Group ID", 1, 0.82, 0)
-            GameTooltip:AddLine("Matches any sub-zone within the same instance group.", 0.8,0.8,0.8, true)
-            GameTooltip:AddLine("Useful for dungeons or raids with multiple floors/wings.", 0.8,0.8,0.8, true)
+            GameTooltip:SetText("Zone Group ID  (matches any sub-zone)", 1, 0.82, 0)
+            GameTooltip:AddLine("Use for instances with multiple floors or wings.", 0.8,0.8,0.8, true)
             GameTooltip:AddLine(" ")
             if groupId then
                 GameTooltip:AddLine("|cff00ff00Current group: " .. tostring(groupId) .. "|r")
-            else
-                GameTooltip:AddLine("|cff888888Enter an instance to see current group ID.|r", 0.5,0.5,0.5)
+                GameTooltip:AddLine(" ")
+            elseif mapId then
+                GameTooltip:AddLine("|cff888888Current zone has no group ID.|r", 0.5,0.5,0.5)
+                GameTooltip:AddLine(" ")
+            end
+            local zl = GetZoneList()
+            local hasAny = false
+            for pass = 1, 2 do
+                local list   = pass == 1 and zl.raids    or zl.dungeons
+                local header = pass == 1 and "Season 1 Raids" or "Season 1 Dungeons"
+                local first  = true
+                for _, e in ipairs(list) do
+                    if e.groupId then
+                        hasAny = true
+                        if first then GameTooltip:AddLine("|cffffd100" .. header .. "|r"); first = false end
+                        GameTooltip:AddDoubleLine("  " .. e.name, tostring(e.groupId), 0.8,0.8,0.8, 1,1,1)
+                    end
+                end
+                if not first then GameTooltip:AddLine(" ") end
+            end
+            if not hasAny then
+                GameTooltip:AddLine("|cff888888No group IDs found for the current season.|r", 0.5,0.5,0.5)
+            end
+            if not mapId then
+                GameTooltip:AddLine("|cff888888Enter an instance to see your current group ID.|r", 0.5,0.5,0.5)
             end
             GameTooltip:Show()
         end)
