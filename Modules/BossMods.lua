@@ -42,6 +42,7 @@ local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 local EDEFS = {
     name         = "New Entry",  anchorX = 0,  anchorY = 200,
     iconEnabled  = true,         iconSize = 32,   iconOverrideId = "", iconSwipe = false, durationOverride = "",
+    disabled     = false,
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
@@ -165,6 +166,7 @@ local function Mtxt(hay, needle, op)
 end
 
 local function PassesLoad(e)
+    if e.disabled then return false end
     if e.loadClass ~= "" then
         local _, cls = UnitClass("player")
         if cls ~= e.loadClass then return false end
@@ -1973,6 +1975,22 @@ function BossModModule:BuildUI(parent, db)
     -- =============================================
     do
         local y = -4
+        local cbDisable = CreateFrame("CheckButton", nil, loadCont, "UICheckButtonTemplate")
+        cbDisable:SetSize(24, 24); cbDisable:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 4, y+3)
+        local cbDisableL = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormal")
+        cbDisableL:SetPoint("LEFT", cbDisable, "RIGHT", 4, 0); cbDisableL:SetText("Disable")
+        cbDisable:SetScript("OnClick", function(s)
+            if not ref.e then return end
+            ref.e.disabled = s:GetChecked()
+            if ref.e.disabled then
+                local id = ref.e.id
+                if annTimers[id] then annTimers[id]:Cancel(); annTimers[id] = nil end
+                if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+                HideEntryFrame(id)
+            end
+        end)
+        y = y - 32
+
         Label(loadCont, 4, y, "Load Conditions", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
         local note = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
@@ -2110,6 +2128,7 @@ function BossModModule:BuildUI(parent, db)
         roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
 
         loadCont.Populate = function(e)
+            cbDisable:SetChecked(e.disabled or false)
             clsDD.Refresh(); encEB:SetText(e.loadEncId or "")
             zoneIdEB:SetText(e.loadZoneId or "")
             diffDD.Refresh(); roleDD.Refresh()
