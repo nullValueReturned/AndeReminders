@@ -499,7 +499,9 @@ local function LayoutIconFrame(f, e, data)
     end
     if f.cooldown then
         if showIcon and e.iconSwipe and data.expirationTime and (data.duration or 0) > 0 then
-            local effDur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration
+            local effDur = (e.durationOverride ~= "" and tonumber(e.durationOverride))
+                        or (e.tmrRemaining    ~= "" and tonumber(e.tmrRemaining))
+                        or data.duration
             f.cooldown:ClearAllPoints()
             f.cooldown:SetAllPoints(f.icon)
             f.cooldown:SetCooldown(data.expirationTime - effDur, effDur)
@@ -580,7 +582,9 @@ local function LayoutBarFrame(f, e, data)
     f.hideTimer   = e.barHideTimer or false
     f.timeLabel:SetShown(not f.hideTimer)
     f.expTime = data.expirationTime
-    f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration or 0
+    f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride))
+         or (e.tmrRemaining    ~= "" and tonumber(e.tmrRemaining))
+         or data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     local isz = bh
