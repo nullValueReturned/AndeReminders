@@ -42,6 +42,7 @@ local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 local EDEFS = {
     name         = "New Entry",  anchorX = 0,  anchorY = 200,
     iconEnabled  = true,         iconSize = 32,   iconOverrideId = "", iconSwipe = false, durationOverride = "",
+    disabled     = false,
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
@@ -165,6 +166,7 @@ local function Mtxt(hay, needle, op)
 end
 
 local function PassesLoad(e)
+    if e.disabled then return false end
     if e.loadClass ~= "" then
         local _, cls = UnitClass("player")
         if cls ~= e.loadClass then return false end
@@ -499,7 +501,9 @@ local function LayoutIconFrame(f, e, data)
     end
     if f.cooldown then
         if showIcon and e.iconSwipe and data.expirationTime and (data.duration or 0) > 0 then
-            local effDur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration
+            local effDur = (e.durationOverride ~= "" and tonumber(e.durationOverride))
+                        or (e.tmrRemaining    ~= "" and tonumber(e.tmrRemaining))
+                        or data.duration
             f.cooldown:ClearAllPoints()
             f.cooldown:SetAllPoints(f.icon)
             f.cooldown:SetCooldown(data.expirationTime - effDur, effDur)
@@ -580,7 +584,9 @@ local function LayoutBarFrame(f, e, data)
     f.hideTimer   = e.barHideTimer or false
     f.timeLabel:SetShown(not f.hideTimer)
     f.expTime = data.expirationTime
-    f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration or 0
+    f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride))
+         or (e.tmrRemaining    ~= "" and tonumber(e.tmrRemaining))
+         or data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     local isz = bh
@@ -1361,8 +1367,8 @@ function BossModModule:BuildUI(parent, db)
         cbSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
         y = y - 28
 
-        Label(iconSec, 4, y-3, "Duration override:")
-        local swipeDurEB = MakeEB(iconSec, 134, y, 56)
+        Label(iconSec, 4, y-3, "Override max duration:")
+        local swipeDurEB = MakeEB(iconSec, 152, y, 56)
         swipeDurEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         swipeDurEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local swipeDurHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
@@ -1564,8 +1570,8 @@ function BossModModule:BuildUI(parent, db)
         cbBarSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
         y = y - 28
 
-        Label(barSec, 4, y-3, "Duration override:")
-        local barDurOvrEB = MakeEB(barSec, 134, y, 56)
+        Label(barSec, 4, y-3, "Override max duration:")
+        local barDurOvrEB = MakeEB(barSec, 152, y, 56)
         barDurOvrEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         barDurOvrEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local barDurOvrHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
@@ -1969,6 +1975,22 @@ function BossModModule:BuildUI(parent, db)
     -- =============================================
     do
         local y = -4
+        local cbDisable = CreateFrame("CheckButton", nil, loadCont, "UICheckButtonTemplate")
+        cbDisable:SetSize(24, 24); cbDisable:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 4, y+3)
+        local cbDisableL = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormal")
+        cbDisableL:SetPoint("LEFT", cbDisable, "RIGHT", 4, 0); cbDisableL:SetText("Disable")
+        cbDisable:SetScript("OnClick", function(s)
+            if not ref.e then return end
+            ref.e.disabled = s:GetChecked()
+            if ref.e.disabled then
+                local id = ref.e.id
+                if annTimers[id] then annTimers[id]:Cancel(); annTimers[id] = nil end
+                if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+                HideEntryFrame(id)
+            end
+        end)
+        y = y - 32
+
         Label(loadCont, 4, y, "Load Conditions", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
         local note = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
@@ -2106,6 +2128,7 @@ function BossModModule:BuildUI(parent, db)
         roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
 
         loadCont.Populate = function(e)
+            cbDisable:SetChecked(e.disabled or false)
             clsDD.Refresh(); encEB:SetText(e.loadEncId or "")
             zoneIdEB:SetText(e.loadZoneId or "")
             diffDD.Refresh(); roleDD.Refresh()
