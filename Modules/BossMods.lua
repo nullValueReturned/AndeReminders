@@ -41,7 +41,7 @@ local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
 local EDEFS = {
     name         = "New Entry",  anchorX = 0,  anchorY = 200,
-    iconEnabled  = true,         iconSize = 32,   iconOverrideId = "",
+    iconEnabled  = true,         iconSize = 32,   iconOverrideId = "", iconSwipe = false, durationOverride = "",
     fontName     = nil,          fontSize = 14,
     tcR=1, tcG=1, tcB=1, tcA=1,
     textPosition = "RIGHT",
@@ -435,6 +435,10 @@ local function MakeIconFrame(id)
     f:SetFrameStrata("HIGH"); f:SetClampedToScreen(true)
     f.icon  = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    f.cooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+    f.cooldown:SetSwipeColor(0, 0, 0, 0.8)
+    f.cooldown:SetHideCountdownNumbers(true)
+    f.cooldown:Hide()
     f.label = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     -- Live-update label when displayTmpl contains %t
     f:SetScript("OnUpdate", function(self)
@@ -493,6 +497,18 @@ local function LayoutIconFrame(f, e, data)
         local lw = math.max(20, f.label:GetStringWidth() + 4)
         f:SetSize(lw, fsz + 4); f.label:SetPoint("CENTER", f, "CENTER")
     end
+    if f.cooldown then
+        if showIcon and e.iconSwipe and data.expirationTime and (data.duration or 0) > 0 then
+            local effDur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration
+            f.cooldown:ClearAllPoints()
+            f.cooldown:SetAllPoints(f.icon)
+            f.cooldown:SetCooldown(data.expirationTime - effDur, effDur)
+            f.cooldown:Show()
+        else
+            f.cooldown:SetCooldown(0, 0)
+            f.cooldown:Hide()
+        end
+    end
 end
 
 -- =============================================================================
@@ -509,6 +525,10 @@ local function MakeBarFrame(id)
     bg:SetAllPoints(sb); bg:SetColorTexture(0, 0, 0, 0.5); f.barBg = bg
     f.icon      = f:CreateTexture(nil, "ARTWORK")
     f.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    f.iconCooldown = CreateFrame("Cooldown", nil, f, "CooldownFrameTemplate")
+    f.iconCooldown:SetSwipeColor(0, 0, 0, 0.8)
+    f.iconCooldown:SetHideCountdownNumbers(true)
+    f.iconCooldown:Hide()
     -- Labels are children of sb so they render above the bar fill texture
     f.label     = sb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.timeLabel = sb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -559,7 +579,8 @@ local function LayoutBarFrame(f, e, data)
     f.lastCount   = data.count or ""
     f.hideTimer   = e.barHideTimer or false
     f.timeLabel:SetShown(not f.hideTimer)
-    f.expTime = data.expirationTime; f.dur = data.duration or 0
+    f.expTime = data.expirationTime
+    f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride)) or data.duration or 0
     local initRem = (data.expirationTime or GetTime()) - GetTime()
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     local isz = bh
@@ -584,6 +605,18 @@ local function LayoutBarFrame(f, e, data)
     if     tp2 == "LEFT"   then f.label:SetPoint("LEFT",f.bar,"LEFT",4,0);    f.timeLabel:SetPoint("RIGHT",f.bar,"RIGHT",-4,0)
     elseif tp2 == "RIGHT"  then f.label:SetPoint("RIGHT",f.bar,"RIGHT",-4,0); f.timeLabel:SetPoint("LEFT",f.bar,"LEFT",4,0)
     else                        f.label:SetPoint("CENTER",f.bar,"CENTER",0,0); f.timeLabel:SetPoint("RIGHT",f.bar,"RIGHT",-4,0) end
+    if f.iconCooldown then
+        if showIcon and e.iconSwipe and data.expirationTime and f.dur > 0 then
+            f.iconCooldown:ClearAllPoints()
+            f.iconCooldown:SetPoint("LEFT", f, "LEFT", 0, 0)
+            f.iconCooldown:SetSize(isz, isz)
+            f.iconCooldown:SetCooldown(data.expirationTime - f.dur, f.dur)
+            f.iconCooldown:Show()
+        else
+            f.iconCooldown:SetCooldown(0, 0)
+            f.iconCooldown:Hide()
+        end
+    end
 end
 
 -- =============================================================================
@@ -1321,6 +1354,22 @@ function BossModModule:BuildUI(parent, db)
         isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
         y = y - 30
 
+        local cbSwipe = CreateFrame("CheckButton", nil, iconSec, "UICheckButtonTemplate")
+        cbSwipe:SetSize(24, 24); cbSwipe:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y+3)
+        local cbSwipeL = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormal")
+        cbSwipeL:SetPoint("LEFT", cbSwipe, "RIGHT", 4, 0); cbSwipeL:SetText("Progress swipe")
+        cbSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
+        y = y - 28
+
+        Label(iconSec, 4, y-3, "Duration override:")
+        local swipeDurEB = MakeEB(iconSec, 134, y, 56)
+        swipeDurEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
+        swipeDurEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
+        local swipeDurHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        swipeDurHint:SetPoint("LEFT", swipeDurEB, "RIGHT", 4, 0)
+        swipeDurHint:SetText("s  (blank = trigger / event)"); swipeDurHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - 26
+
         Label(iconSec, 4, y-3, "Override icon:")
         local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
         ovrTex:SetSize(20, 20); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -1404,6 +1453,8 @@ function BossModModule:BuildUI(parent, db)
         -- populate for icon section
         iconSec.Populate = function(e)
             isizeEB:SetText(tostring(e.iconSize or 32))
+            cbSwipe:SetChecked(e.iconSwipe or false)
+            swipeDurEB:SetText(e.durationOverride or "")
             ovrEB:SetText(e.iconOverrideId or "")
             if e.iconOverrideId and e.iconOverrideId ~= "" then
                 local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
@@ -1506,6 +1557,22 @@ function BossModModule:BuildUI(parent, db)
         cbHT:SetScript("OnClick", function(s) if ref.e then ref.e.barHideTimer = s:GetChecked(); RefreshPreview() end end)
         y = y - 28
 
+        local cbBarSwipe = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
+        cbBarSwipe:SetSize(24, 24); cbBarSwipe:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y+3)
+        local cbBarSwipeL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal")
+        cbBarSwipeL:SetPoint("LEFT", cbBarSwipe, "RIGHT", 4, 0); cbBarSwipeL:SetText("Progress swipe on icon")
+        cbBarSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
+        y = y - 28
+
+        Label(barSec, 4, y-3, "Duration override:")
+        local barDurOvrEB = MakeEB(barSec, 134, y, 56)
+        barDurOvrEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
+        barDurOvrEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
+        local barDurOvrHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        barDurOvrHint:SetPoint("LEFT", barDurOvrEB, "RIGHT", 4, 0)
+        barDurOvrHint:SetText("s  (blank = trigger / event)"); barDurOvrHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - 26
+
         Label(barSec, 4, y-3, "Override icon:")
         local barOvrTex = barSec:CreateTexture(nil, "ARTWORK")
         barOvrTex:SetSize(20, 20); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -1592,6 +1659,8 @@ function BossModModule:BuildUI(parent, db)
             bhEB:SetText(tostring(e.barHeight or 22))
             cbBI:SetChecked(e.iconEnabled)
             cbHT:SetChecked(e.barHideTimer or false)
+            cbBarSwipe:SetChecked(e.iconSwipe or false)
+            barDurOvrEB:SetText(e.durationOverride or "")
             barOvrEB:SetText(e.iconOverrideId or "")
             if e.iconOverrideId and e.iconOverrideId ~= "" then
                 local texVal = tonumber(e.iconOverrideId) or e.iconOverrideId
