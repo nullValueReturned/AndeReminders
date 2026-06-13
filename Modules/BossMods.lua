@@ -1361,8 +1361,8 @@ function BossModModule:BuildUI(parent, db)
         cbSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
         y = y - 28
 
-        Label(iconSec, 4, y-3, "Duration override:")
-        local swipeDurEB = MakeEB(iconSec, 134, y, 56)
+        Label(iconSec, 4, y-3, "Override max duration:")
+        local swipeDurEB = MakeEB(iconSec, 152, y, 56)
         swipeDurEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         swipeDurEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local swipeDurHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
@@ -1564,8 +1564,8 @@ function BossModModule:BuildUI(parent, db)
         cbBarSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
         y = y - 28
 
-        Label(barSec, 4, y-3, "Duration override:")
-        local barDurOvrEB = MakeEB(barSec, 134, y, 56)
+        Label(barSec, 4, y-3, "Override max duration:")
+        local barDurOvrEB = MakeEB(barSec, 152, y, 56)
         barDurOvrEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         barDurOvrEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local barDurOvrHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
