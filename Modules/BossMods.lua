@@ -40,7 +40,7 @@ local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 -- =============================================================================
 
 local EDEFS = {
-    name         = "New Entry",  anchorX = 0,  anchorY = 200,
+    name         = "New Entry",  anchorX = 0,  anchorY = 200,  anchorPoint = "CENTER",
     iconEnabled  = true,         iconSize = 32,   iconOverrideId = "", iconSwipe = false, durationOverride = "",
     disabled     = false,
     fontName     = nil,          fontSize = 14,
@@ -636,10 +636,27 @@ local function MakeGroupFrame(id)
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local cx, cy = self:GetCenter(); local ux, uy = UIParent:GetCenter()
-        if cx and ux then
+        local fl, fb = self:GetLeft(), self:GetBottom()
+        local ux, uy = UIParent:GetCenter()
+        if fl and ux then
+            local fw, fh = self:GetWidth(), self:GetHeight()
             local e = AR.db.bossmods.entries[id]
-            if e then e.anchorX = math.floor(cx-ux+0.5); e.anchorY = math.floor(cy-uy+0.5) end
+            if e then
+                local ap = e.anchorPoint or "CENTER"
+                local ax, ay
+                if     ap == "TOP"         then ax = fl + fw/2;  ay = fb + fh
+                elseif ap == "BOTTOM"      then ax = fl + fw/2;  ay = fb
+                elseif ap == "LEFT"        then ax = fl;          ay = fb + fh/2
+                elseif ap == "RIGHT"       then ax = fl + fw;     ay = fb + fh/2
+                elseif ap == "TOPLEFT"     then ax = fl;          ay = fb + fh
+                elseif ap == "TOPRIGHT"    then ax = fl + fw;     ay = fb + fh
+                elseif ap == "BOTTOMLEFT"  then ax = fl;          ay = fb
+                elseif ap == "BOTTOMRIGHT" then ax = fl + fw;     ay = fb
+                else                           ax = fl + fw/2;    ay = fb + fh/2
+                end
+                e.anchorX = math.floor(ax - ux + 0.5)
+                e.anchorY = math.floor(ay - uy + 0.5)
+            end
         end
     end)
     -- Backdrop and label visible only during settings preview, invisible at runtime
@@ -747,7 +764,8 @@ local function GetFrame(e)
     elseif e.type == "bar"   then f = MakeBarFrame(e.id)
     elseif e.type == "group" then f = MakeGroupFrame(e.id) end
     if f then
-        f:SetPoint("CENTER", UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
+        local ap = e.anchorPoint or "CENTER"
+        f:SetPoint(ap, UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
         entryFrames[e.id] = f
     end
     return f
@@ -783,7 +801,8 @@ ShowEntryFrame = function(e, data)
         AddToGroup(e, data); f:Show(); RefreshGroupLayout(e.groupId)
     else
         f:ClearAllPoints()
-        f:SetPoint("CENTER", UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
+        local ap = e.anchorPoint or "CENTER"
+        f:SetPoint(ap, UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
         f:Show()
     end
     -- Reset per-activation state then fire "show" conditions
@@ -937,7 +956,9 @@ end
 
 local function Label(parent, x, y, text, template)
     local fs = parent:CreateFontString(nil, "OVERLAY", template or "GameFontNormal")
-    fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y); fs:SetText(text); return fs
+    fs:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y); fs:SetText(text)
+    if not template then fs:SetTextColor(1, 1, 1) end
+    return fs
 end
 
 local function Divider(parent, y)
@@ -1245,11 +1266,16 @@ function BossModModule:BuildUI(parent, db)
     local sp = CreateFrame("Frame", nil, rp)
     sp:SetAllPoints(rp); sp:Hide()
 
+    -- Two-column layout constants (label left, control right)
+    local LX = 8    -- label left edge
+    local CX = 150  -- control left edge
+    local RH = 26   -- row vertical step
+
     -- Name row
     local nameLabel = sp:CreateFontString(nil,"OVERLAY","GameFontNormal")
-    nameLabel:SetPoint("TOPLEFT", sp, "TOPLEFT", 4, -8); nameLabel:SetText("Name:")
+    nameLabel:SetPoint("TOPLEFT", sp, "TOPLEFT", LX, -8); nameLabel:SetText("Name:")
     local nameEB = CreateFrame("EditBox", nil, sp, "InputBoxTemplate")
-    nameEB:SetSize(220, 20); nameEB:SetPoint("LEFT", nameLabel, "RIGHT", 6, 0); nameEB:SetAutoFocus(false)
+    nameEB:SetSize(220, 20); nameEB:SetPoint("TOPLEFT", sp, "TOPLEFT", CX, -6); nameEB:SetAutoFocus(false)
     local delBtn = CreateFrame("Button", nil, sp, "UIPanelButtonTemplate")
     delBtn:SetSize(64, 20); delBtn:SetPoint("LEFT", nameEB, "RIGHT", 8, 0); delBtn:SetText("Delete")
 
@@ -1265,6 +1291,8 @@ function BossModModule:BuildUI(parent, db)
             subBtns[i]:SetBackdropColor(i==idx and 0.12 or 0.05, i==idx and 0.26 or 0.05, i==idx and 0.6 or 0.05, 1)
         end
     end
+
+    local subScrollChilds = {}
 
     for i, n in ipairs(SUB_NAMES) do
         local bt = CreateFrame("Button", nil, sp, "BackdropTemplate")
@@ -1282,12 +1310,20 @@ function BossModModule:BuildUI(parent, db)
         sc:SetPoint("TOPLEFT",     sp, "TOPLEFT",     4, -62)
         sc:SetPoint("BOTTOMRIGHT", sp, "BOTTOMRIGHT", -4, 0)
         sc:Hide(); subConts[i] = sc
+
+        local sf = CreateFrame("ScrollFrame", nil, sc, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT",     sc, "TOPLEFT",     0,   0)
+        sf:SetPoint("BOTTOMRIGHT", sc, "BOTTOMRIGHT", -20, 0)
+        local child = CreateFrame("Frame", nil, sf)
+        child:SetWidth(700); child:SetHeight(1400)
+        sf:SetScrollChild(child)
+        subScrollChilds[i] = child
     end
 
-    local displayCont = subConts[1]
-    local trigCont    = subConts[2]
-    local loadCont    = subConts[3]
-    local condCont    = subConts[4]
+    local displayCont = subScrollChilds[1]
+    local trigCont    = subScrollChilds[2]
+    local loadCont    = subScrollChilds[3]
+    local condCont    = subScrollChilds[4]
 
     -- =============================================
     -- Shared entry reference pointer
@@ -1350,44 +1386,56 @@ function BossModModule:BuildUI(parent, db)
     local barSec   = CreateFrame("Frame", nil, displayCont); barSec:SetAllPoints(displayCont)
     local grpSec   = CreateFrame("Frame", nil, displayCont); grpSec:SetAllPoints(displayCont)
 
+    local ANCHOR_OPTS = {
+        {label="Center",       value="CENTER"},
+        {label="Top",          value="TOP"},
+        {label="Bottom",       value="BOTTOM"},
+        {label="Left",         value="LEFT"},
+        {label="Right",        value="RIGHT"},
+        {label="Top Left",     value="TOPLEFT"},
+        {label="Top Right",    value="TOPRIGHT"},
+        {label="Bottom Left",  value="BOTTOMLEFT"},
+        {label="Bottom Right", value="BOTTOMRIGHT"},
+    }
+
     -- ---- Icon section widgets ----
     do
-        local y = -4
-        Label(iconSec, 4, y, "Icon", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        local y = -8
+        Label(iconSec, LX, y, "Icon", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(iconSec, 4, y-1, "Size:"); local isizeEB = MakeEB(iconSec, 40, y+2, 44, true)
+        Label(iconSec, LX, y-3, "Size:")
+        local isizeEB = MakeEB(iconSec, CX, y, 52, true)
         isizeEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; s:ClearFocus(); RefreshPreview() end)
         isizeEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.iconSize = tonumber(s:GetText()) or 32 end; RefreshPreview() end)
-        y = y - 30
+        y = y - RH
 
+        Label(iconSec, LX, y-3, "Progress swipe:")
         local cbSwipe = CreateFrame("CheckButton", nil, iconSec, "UICheckButtonTemplate")
-        cbSwipe:SetSize(24, 24); cbSwipe:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y+3)
-        local cbSwipeL = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormal")
-        cbSwipeL:SetPoint("LEFT", cbSwipe, "RIGHT", 4, 0); cbSwipeL:SetText("Progress swipe")
+        cbSwipe:SetSize(24, 24); cbSwipe:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX - 2, y)
         cbSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
-        y = y - 28
+        y = y - RH
 
-        Label(iconSec, 4, y-3, "Override max duration:")
-        local swipeDurEB = MakeEB(iconSec, 152, y, 56)
+        Label(iconSec, LX, y-3, "Max duration:")
+        local swipeDurEB = MakeEB(iconSec, CX, y, 56)
         swipeDurEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         swipeDurEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local swipeDurHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         swipeDurHint:SetPoint("LEFT", swipeDurEB, "RIGHT", 4, 0)
-        swipeDurHint:SetText("s  (blank = trigger / event)"); swipeDurHint:SetTextColor(0.5, 0.5, 0.5)
-        y = y - 26
+        swipeDurHint:SetText("s  (blank = auto)"); swipeDurHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - RH
 
-        Label(iconSec, 4, y-3, "Override icon:")
-        local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
-        ovrTex:SetSize(20, 20); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-        ovrTex:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 100, y-1); ovrTex:SetAlpha(0.2)
-        local ovrEB = MakeEB(iconSec, 124, y, 120)
+        Label(iconSec, LX, y-3, "Override icon:")
+        local ovrEB = MakeEB(iconSec, CX, y, 110)
         local ovrChooseBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
-        ovrChooseBtn:SetSize(60, 20); ovrChooseBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrChooseBtn:SetText("Choose")
+        ovrChooseBtn:SetSize(58, 20); ovrChooseBtn:SetPoint("LEFT", ovrEB, "RIGHT", 4, 0); ovrChooseBtn:SetText("Choose")
         local ovrClearBtn = CreateFrame("Button", nil, iconSec, "UIPanelButtonTemplate")
         ovrClearBtn:SetSize(48, 20); ovrClearBtn:SetPoint("LEFT", ovrChooseBtn, "RIGHT", 4, 0); ovrClearBtn:SetText("Clear")
+        local ovrTex = iconSec:CreateTexture(nil, "ARTWORK")
+        ovrTex:SetSize(22, 22); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        ovrTex:SetPoint("LEFT", ovrClearBtn, "RIGHT", 6, 0); ovrTex:SetAlpha(0.2)
         local ovrHint = iconSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        ovrHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
-        ovrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
+        ovrHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y - 18)
+        ovrHint:SetText("File ID or path (blank = BW/DBM icon)")
         ovrHint:SetTextColor(0.5, 0.5, 0.5)
         local function ApplyOvrInput()
             if not ref.e then return end
@@ -1413,50 +1461,74 @@ function BossModModule:BuildUI(parent, db)
             end, ref.e.iconOverrideId)
         end)
         ovrClearBtn:SetScript("OnClick", function() ovrEB:SetText(""); ApplyOvrInput() end)
-        y = y - 44
+        y = y - RH - 18
 
         Divider(iconSec, y); y = y - 14
-        Label(iconSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        Label(iconSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(iconSec, 4, y-4, "Font:")
+        Label(iconSec, LX, y-4, "Font:")
         local fontOpts = GetFontList()
         local fontDD = ScrollDrop(iconSec, 180, fontOpts,
             function() return ref.e and ref.e.fontName or fontOpts[1] end,
             function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end, "font")
-        fontDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 40, y)
-        Label(iconSec, 228, y-3, "Size:")
-        local fsEB = MakeEB(iconSec, 260, y, 44, true)
+        fontDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(iconSec, LX, y-3, "Font size:")
+        local fsEB = MakeEB(iconSec, CX, y, 52, true)
         fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus(); RefreshPreview() end)
         fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; RefreshPreview() end)
-        y = y - 28
+        y = y - RH
 
-        Label(iconSec, 4, y-3, "Text color:")
+        Label(iconSec, LX, y-3, "Text color:")
         local tcSwatch = Swatch(iconSec,
             function() return ref.e and ref.e.tcR or 1 end,
             function() return ref.e and ref.e.tcG or 1 end,
             function() return ref.e and ref.e.tcB or 1 end,
             function() return ref.e and ref.e.tcA or 1 end,
             function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a; RefreshPreview() end end)
-        tcSwatch:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 82, y)
+        tcSwatch:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(iconSec, 116, y-4, "Position:")
+        Label(iconSec, LX, y-4, "Text position:")
         local posOpts = {{label="Right",value="RIGHT"},{label="Left",value="LEFT"},{label="Top",value="TOP"},{label="Bottom",value="BOTTOM"}}
-        local posDD = ScrollDrop(iconSec, 90, posOpts,
+        local posDD = ScrollDrop(iconSec, 100, posOpts,
             function() return ref.e and ref.e.textPosition or "RIGHT" end,
             function(v) if ref.e then ref.e.textPosition = v; RefreshPreview() end end)
-        posDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 172, y)
-        y = y - 28
+        posDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(iconSec, 4, y-3, "Display text:")
-        local dispEB = MakeEB(iconSec, 92, y, 300)
+        Label(iconSec, LX, y-3, "Display text:")
+        local dispEB = MakeEB(iconSec, CX, y, 280)
         dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
         dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
         local dispHint = iconSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-        dispHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", 4, y - 22)
-        dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
+        dispHint:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y - 18)
+        dispHint:SetText("Blank = boss mod message.  %m=message  %c=count")
         dispHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - RH - 18
 
-        -- populate for icon section
+        Divider(iconSec, y); y = y - 14
+        Label(iconSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+
+        Label(iconSec, LX, y-4, "Anchor point:")
+        local anchorDD = ScrollDrop(iconSec, 140, ANCHOR_OPTS,
+            function() return ref.e and ref.e.anchorPoint or "CENTER" end,
+            function(v) if ref.e then ref.e.anchorPoint = v; RefreshPreview() end end)
+        anchorDD:SetPoint("TOPLEFT", iconSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(iconSec, LX, y-3, "X offset:")
+        local anchorXEB = MakeEB(iconSec, CX, y, 70)
+        anchorXEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end; s:ClearFocus() end)
+        anchorXEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end end)
+        y = y - RH
+
+        Label(iconSec, LX, y-3, "Y offset:")
+        local anchorYEB = MakeEB(iconSec, CX, y, 70)
+        anchorYEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end; s:ClearFocus() end)
+        anchorYEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end end)
+
         iconSec.Populate = function(e)
             isizeEB:SetText(tostring(e.iconSize or 32))
             cbSwipe:SetChecked(e.iconSwipe or false)
@@ -1473,124 +1545,157 @@ function BossModModule:BuildUI(parent, db)
             tcSwatch.Refresh()
             posDD.Refresh()
             dispEB:SetText(e.displayText or "")
+            anchorDD.Refresh()
+            anchorXEB:SetText(tostring(e.anchorX or 0))
+            anchorYEB:SetText(tostring(e.anchorY or 200))
         end
     end
 
     -- ---- Text section widgets ----
     do
-        local y = -4
-        Label(textSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        local y = -8
+        Label(textSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(textSec, 4, y-4, "Font:")
+        Label(textSec, LX, y-4, "Font:")
         local fontOpts = GetFontList()
         local fontDD = ScrollDrop(textSec, 180, fontOpts,
             function() return ref.e and ref.e.fontName or fontOpts[1] end,
             function(v) if ref.e then ref.e.fontName = v; RefreshPreview() end end, "font")
-        fontDD:SetPoint("TOPLEFT", textSec, "TOPLEFT", 40, y)
-        Label(textSec, 228, y-3, "Size:")
-        local fsEB = MakeEB(textSec, 260, y, 44, true)
+        fontDD:SetPoint("TOPLEFT", textSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(textSec, LX, y-3, "Font size:")
+        local fsEB = MakeEB(textSec, CX, y, 52, true)
         fsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; s:ClearFocus(); RefreshPreview() end)
         fsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.fontSize = tonumber(s:GetText()) or 14 end; RefreshPreview() end)
-        y = y - 28
+        y = y - RH
 
-        Label(textSec, 4, y-3, "Text color:")
+        Label(textSec, LX, y-3, "Text color:")
         local tcSwatch = Swatch(textSec,
             function() return ref.e and ref.e.tcR or 1 end,
             function() return ref.e and ref.e.tcG or 1 end,
             function() return ref.e and ref.e.tcB or 1 end,
             function() return ref.e and ref.e.tcA or 1 end,
             function(r,g,b,a) if ref.e then ref.e.tcR,ref.e.tcG,ref.e.tcB,ref.e.tcA=r,g,b,a; RefreshPreview() end end)
-        tcSwatch:SetPoint("TOPLEFT", textSec, "TOPLEFT", 82, y)
-        y = y - 28
+        tcSwatch:SetPoint("TOPLEFT", textSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(textSec, 4, y-3, "Display text:")
-        local dispEB = MakeEB(textSec, 92, y, 300)
+        Label(textSec, LX, y-3, "Display text:")
+        local dispEB = MakeEB(textSec, CX, y, 280)
         dispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
         dispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
         local dispHint = textSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-        dispHint:SetPoint("TOPLEFT", textSec, "TOPLEFT", 4, y - 22)
-        dispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count")
+        dispHint:SetPoint("TOPLEFT", textSec, "TOPLEFT", CX, y - 18)
+        dispHint:SetText("Blank = boss mod message.  %m=message  %c=count")
         dispHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - RH - 18
+
+        Divider(textSec, y); y = y - 14
+        Label(textSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+
+        Label(textSec, LX, y-4, "Anchor point:")
+        local anchorDD = ScrollDrop(textSec, 140, ANCHOR_OPTS,
+            function() return ref.e and ref.e.anchorPoint or "CENTER" end,
+            function(v) if ref.e then ref.e.anchorPoint = v; RefreshPreview() end end)
+        anchorDD:SetPoint("TOPLEFT", textSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(textSec, LX, y-3, "X offset:")
+        local anchorXEB = MakeEB(textSec, CX, y, 70)
+        anchorXEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end; s:ClearFocus() end)
+        anchorXEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end end)
+        y = y - RH
+
+        Label(textSec, LX, y-3, "Y offset:")
+        local anchorYEB = MakeEB(textSec, CX, y, 70)
+        anchorYEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end; s:ClearFocus() end)
+        anchorYEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end end)
 
         textSec.Populate = function(e)
             fontDD.Refresh()
             fsEB:SetText(tostring(e.fontSize or 14))
             tcSwatch.Refresh()
             dispEB:SetText(e.displayText or "")
+            anchorDD.Refresh()
+            anchorXEB:SetText(tostring(e.anchorX or 0))
+            anchorYEB:SetText(tostring(e.anchorY or 200))
         end
     end
 
     -- ---- Bar section widgets ----
     do
-        local y = -4
-        Label(barSec, 4, y, "Bar", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        local y = -8
+        Label(barSec, LX, y, "Bar", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(barSec, 4, y-4, "Texture:")
+        Label(barSec, LX, y-4, "Texture:")
         local texOpts = GetTexList()
         local texDD = ScrollDrop(barSec, 180, texOpts,
             function() return ref.e and ref.e.barTexName or texOpts[1] end,
             function(v) if ref.e then ref.e.barTexName = v; RefreshPreview() end end, "texture")
-        texDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 60, y)
-        y = y - 28
+        texDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(barSec, 4, y-3, "Bar color:")
+        Label(barSec, LX, y-3, "Bar color:")
         local bcSwatch = Swatch(barSec,
             function() return ref.e and ref.e.bcR or 0.2 end,
             function() return ref.e and ref.e.bcG or 0.8 end,
             function() return ref.e and ref.e.bcB or 0.2 end,
             function() return ref.e and ref.e.bcA or 1   end,
             function(r,g,b,a) if ref.e then ref.e.bcR,ref.e.bcG,ref.e.bcB,ref.e.bcA=r,g,b,a; RefreshPreview() end end)
-        bcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", 68, y)
+        bcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(barSec, 100, y-3, "Width:")
-        local bwEB = MakeEB(barSec, 138, y, 52, true)
+        Label(barSec, LX, y-3, "Width:")
+        local bwEB = MakeEB(barSec, CX, y, 52, true)
         bwEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end; s:ClearFocus(); RefreshPreview() end)
         bwEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barWidth = tonumber(s:GetText()) or 220 end; RefreshPreview() end)
-        Label(barSec, 198, y-3, "Height:")
-        local bhEB = MakeEB(barSec, 242, y, 44, true)
+        y = y - RH
+
+        Label(barSec, LX, y-3, "Height:")
+        local bhEB = MakeEB(barSec, CX, y, 52, true)
         bhEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end; s:ClearFocus(); RefreshPreview() end)
         bhEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barHeight = tonumber(s:GetText()) or 22 end; RefreshPreview() end)
-        y = y - 28
+        y = y - RH
 
+        Label(barSec, LX, y-3, "Show icon:")
         local cbBI = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
-        cbBI:SetSize(24, 24); cbBI:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y+3)
-        local cbBIL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbBIL:SetPoint("LEFT",cbBI,"RIGHT",4,0); cbBIL:SetText("Enable icon")
+        cbBI:SetSize(24, 24); cbBI:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX - 2, y)
         cbBI:SetScript("OnClick", function(s) if ref.e then ref.e.iconEnabled = s:GetChecked(); RefreshPreview() end end)
+        y = y - RH
 
+        Label(barSec, LX, y-3, "Hide timer text:")
         local cbHT = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
-        cbHT:SetSize(24, 24); cbHT:SetPoint("LEFT", cbBIL, "RIGHT", 24, 0)
-        local cbHTL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal"); cbHTL:SetPoint("LEFT",cbHT,"RIGHT",4,0); cbHTL:SetText("Hide timer text")
+        cbHT:SetSize(24, 24); cbHT:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX - 2, y)
         cbHT:SetScript("OnClick", function(s) if ref.e then ref.e.barHideTimer = s:GetChecked(); RefreshPreview() end end)
-        y = y - 28
+        y = y - RH
 
+        Label(barSec, LX, y-3, "Progress swipe:")
         local cbBarSwipe = CreateFrame("CheckButton", nil, barSec, "UICheckButtonTemplate")
-        cbBarSwipe:SetSize(24, 24); cbBarSwipe:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y+3)
-        local cbBarSwipeL = barSec:CreateFontString(nil,"OVERLAY","GameFontNormal")
-        cbBarSwipeL:SetPoint("LEFT", cbBarSwipe, "RIGHT", 4, 0); cbBarSwipeL:SetText("Progress swipe on icon")
+        cbBarSwipe:SetSize(24, 24); cbBarSwipe:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX - 2, y)
         cbBarSwipe:SetScript("OnClick", function(s) if ref.e then ref.e.iconSwipe = s:GetChecked() end end)
-        y = y - 28
+        y = y - RH
 
-        Label(barSec, 4, y-3, "Override max duration:")
-        local barDurOvrEB = MakeEB(barSec, 152, y, 56)
+        Label(barSec, LX, y-3, "Max duration:")
+        local barDurOvrEB = MakeEB(barSec, CX, y, 56)
         barDurOvrEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.durationOverride = s:GetText() end; s:ClearFocus() end)
         barDurOvrEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.durationOverride = s:GetText() end end)
         local barDurOvrHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         barDurOvrHint:SetPoint("LEFT", barDurOvrEB, "RIGHT", 4, 0)
-        barDurOvrHint:SetText("s  (blank = trigger / event)"); barDurOvrHint:SetTextColor(0.5, 0.5, 0.5)
-        y = y - 26
+        barDurOvrHint:SetText("s  (blank = auto)"); barDurOvrHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - RH
 
-        Label(barSec, 4, y-3, "Override icon:")
-        local barOvrTex = barSec:CreateTexture(nil, "ARTWORK")
-        barOvrTex:SetSize(20, 20); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-        barOvrTex:SetPoint("TOPLEFT", barSec, "TOPLEFT", 100, y-1); barOvrTex:SetAlpha(0.2)
-        local barOvrEB = MakeEB(barSec, 124, y, 120)
+        Label(barSec, LX, y-3, "Override icon:")
+        local barOvrEB = MakeEB(barSec, CX, y, 110)
         local barOvrChooseBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
-        barOvrChooseBtn:SetSize(60, 20); barOvrChooseBtn:SetPoint("LEFT", barOvrEB, "RIGHT", 4, 0); barOvrChooseBtn:SetText("Choose")
+        barOvrChooseBtn:SetSize(58, 20); barOvrChooseBtn:SetPoint("LEFT", barOvrEB, "RIGHT", 4, 0); barOvrChooseBtn:SetText("Choose")
         local barOvrClearBtn = CreateFrame("Button", nil, barSec, "UIPanelButtonTemplate")
         barOvrClearBtn:SetSize(48, 20); barOvrClearBtn:SetPoint("LEFT", barOvrChooseBtn, "RIGHT", 4, 0); barOvrClearBtn:SetText("Clear")
+        local barOvrTex = barSec:CreateTexture(nil, "ARTWORK")
+        barOvrTex:SetSize(22, 22); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+        barOvrTex:SetPoint("LEFT", barOvrClearBtn, "RIGHT", 6, 0); barOvrTex:SetAlpha(0.2)
         local barOvrHint = barSec:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-        barOvrHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
-        barOvrHint:SetText("Icon file ID (number) or blank to use the BW/DBM icon")
+        barOvrHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y - 18)
+        barOvrHint:SetText("File ID or path (blank = BW/DBM icon)")
         barOvrHint:SetTextColor(0.5, 0.5, 0.5)
         local function ApplyBarOvrInput()
             if not ref.e then return end
@@ -1616,48 +1721,73 @@ function BossModModule:BuildUI(parent, db)
             end, ref.e.iconOverrideId)
         end)
         barOvrClearBtn:SetScript("OnClick", function() barOvrEB:SetText(""); ApplyBarOvrInput() end)
-        y = y - 44
+        y = y - RH - 18
 
         Divider(barSec, y); y = y - 14
-        Label(barSec, 4, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        Label(barSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(barSec, 4, y-4, "Font:")
+        Label(barSec, LX, y-4, "Font:")
         local bfOpts = GetFontList()
         local bfDD = ScrollDrop(barSec, 180, bfOpts,
             function() return ref.e and ref.e.barFontName or bfOpts[1] end,
             function(v) if ref.e then ref.e.barFontName = v; RefreshPreview() end end, "font")
-        bfDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 40, y)
-        Label(barSec, 228, y-3, "Size:")
-        local bfsEB = MakeEB(barSec, 260, y, 44, true)
+        bfDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(barSec, LX, y-3, "Font size:")
+        local bfsEB = MakeEB(barSec, CX, y, 52, true)
         bfsEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end; s:ClearFocus(); RefreshPreview() end)
         bfsEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.barFontSize = tonumber(s:GetText()) or 12 end; RefreshPreview() end)
-        y = y - 28
+        y = y - RH
 
-        Label(barSec, 4, y-3, "Text color:")
+        Label(barSec, LX, y-3, "Text color:")
         local btcSwatch = Swatch(barSec,
             function() return ref.e and ref.e.btcR or 1 end,
             function() return ref.e and ref.e.btcG or 1 end,
             function() return ref.e and ref.e.btcB or 1 end,
             function() return ref.e and ref.e.btcA or 1 end,
             function(r,g,b,a) if ref.e then ref.e.btcR,ref.e.btcG,ref.e.btcB,ref.e.btcA=r,g,b,a; RefreshPreview() end end)
-        btcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", 74, y)
+        btcSwatch:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(barSec, 106, y-4, "Position:")
+        Label(barSec, LX, y-4, "Text position:")
         local btpOpts = {{label="Center",value="CENTER"},{label="Left",value="LEFT"},{label="Right",value="RIGHT"}}
-        local btpDD = ScrollDrop(barSec, 90, btpOpts,
+        local btpDD = ScrollDrop(barSec, 100, btpOpts,
             function() return ref.e and ref.e.barTextPos or "CENTER" end,
             function(v) if ref.e then ref.e.barTextPos = v; RefreshPreview() end end)
-        btpDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", 162, y)
-        y = y - 28
+        btpDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(barSec, 4, y-3, "Display text:")
-        local bDispEB = MakeEB(barSec, 92, y, 300)
+        Label(barSec, LX, y-3, "Display text:")
+        local bDispEB = MakeEB(barSec, CX, y, 280)
         bDispEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.displayText = s:GetText() end; s:ClearFocus(); RefreshPreview() end)
         bDispEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.displayText = s:GetText() end; RefreshPreview() end)
         local bDispHint = barSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-        bDispHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", 4, y - 22)
-        bDispHint:SetText("Leave blank to show the boss mod message.  %m = message  |  %c = count  |  %t = time left")
+        bDispHint:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y - 18)
+        bDispHint:SetText("Blank = boss mod message.  %m=message  %c=count  %t=time")
         bDispHint:SetTextColor(0.5, 0.5, 0.5)
+        y = y - RH - 18
+
+        Divider(barSec, y); y = y - 14
+        Label(barSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+
+        Label(barSec, LX, y-4, "Anchor point:")
+        local anchorDD = ScrollDrop(barSec, 140, ANCHOR_OPTS,
+            function() return ref.e and ref.e.anchorPoint or "CENTER" end,
+            function(v) if ref.e then ref.e.anchorPoint = v; RefreshPreview() end end)
+        anchorDD:SetPoint("TOPLEFT", barSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(barSec, LX, y-3, "X offset:")
+        local anchorXEB = MakeEB(barSec, CX, y, 70)
+        anchorXEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end; s:ClearFocus() end)
+        anchorXEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end end)
+        y = y - RH
+
+        Label(barSec, LX, y-3, "Y offset:")
+        local anchorYEB = MakeEB(barSec, CX, y, 70)
+        anchorYEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end; s:ClearFocus() end)
+        anchorYEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end end)
 
         barSec.Populate = function(e)
             texDD.Refresh(); bcSwatch.Refresh()
@@ -1678,39 +1808,44 @@ function BossModModule:BuildUI(parent, db)
             bfsEB:SetText(tostring(e.barFontSize or 12))
             btcSwatch.Refresh(); btpDD.Refresh()
             bDispEB:SetText(e.displayText or "")
+            anchorDD.Refresh()
+            anchorXEB:SetText(tostring(e.anchorX or 0))
+            anchorYEB:SetText(tostring(e.anchorY or 200))
         end
     end
 
     -- ---- Group section widgets ----
     do
-        local y = -4
-        Label(grpSec, 4, y, "Group Layout", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        local y = -8
+        Label(grpSec, LX, y, "Group Layout", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
-        Label(grpSec, 4, y-4, "Growth direction:")
+        Label(grpSec, LX, y-4, "Growth direction:")
         local gdOpts = {{label="Down",value="DOWN"},{label="Up",value="UP"},{label="Right",value="RIGHT"},{label="Left",value="LEFT"}}
-        local gdDD = ScrollDrop(grpSec, 100, gdOpts,
+        local gdDD = ScrollDrop(grpSec, 110, gdOpts,
             function() return ref.e and ref.e.growthDir or "DOWN" end,
             function(v) if ref.e then ref.e.growthDir = v; RefreshPreview() end end)
-        gdDD:SetPoint("TOPLEFT", grpSec, "TOPLEFT", 124, y)
-        y = y - 28
+        gdDD:SetPoint("TOPLEFT", grpSec, "TOPLEFT", CX, y)
+        y = y - RH
 
-        Label(grpSec, 4, y-3, "Spacing:")
-        local spEB = MakeEB(grpSec, 64, y, 44, true)
+        Label(grpSec, LX, y-3, "Spacing:")
+        local spEB = MakeEB(grpSec, CX, y, 52, true)
         spEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end; s:ClearFocus(); RefreshPreview() end)
         spEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.spacing = tonumber(s:GetText()) or 4 end; RefreshPreview() end)
-        y = y - 28
+        y = y - RH
 
         Divider(grpSec, y); y = y - 14
-        local memHdr = Label(grpSec, 4, y, "Members:", "GameFontNormal"); y = y - 24
+        Label(grpSec, LX, y, "Members:", "GameFontNormal"); y = y - 24
 
         -- Member list (rebuilt on populate)
         local memberContainer = CreateFrame("Frame", nil, grpSec)
-        memberContainer:SetPoint("TOPLEFT",     grpSec, "TOPLEFT",     4, y)
-        memberContainer:SetPoint("BOTTOMRIGHT", grpSec, "BOTTOMRIGHT", -4, 30)
+        memberContainer:SetPoint("TOPLEFT", grpSec, "TOPLEFT", LX, y)
+        memberContainer:SetSize(620, 200)
+        y = y - 204
 
         local addMemberBtn = CreateFrame("Button", nil, grpSec, "UIPanelButtonTemplate")
         addMemberBtn:SetSize(100, 20)
-        addMemberBtn:SetPoint("BOTTOMLEFT", grpSec, "BOTTOMLEFT", 4, 4)
+        addMemberBtn:SetPoint("TOPLEFT", grpSec, "TOPLEFT", LX, y)
+        y = y - 28
         addMemberBtn:SetText("Add member")
 
         -- Popup for member picker
@@ -1768,9 +1903,33 @@ function BossModModule:BuildUI(parent, db)
         end)
         grpSec:HookScript("OnHide", function() memberPickerPopup:Hide() end)
 
+        Divider(grpSec, y); y = y - 14
+        Label(grpSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+
+        Label(grpSec, LX, y-4, "Anchor point:")
+        local anchorDD = ScrollDrop(grpSec, 140, ANCHOR_OPTS,
+            function() return ref.e and ref.e.anchorPoint or "CENTER" end,
+            function(v) if ref.e then ref.e.anchorPoint = v; RefreshPreview() end end)
+        anchorDD:SetPoint("TOPLEFT", grpSec, "TOPLEFT", CX, y)
+        y = y - RH
+
+        Label(grpSec, LX, y-3, "X offset:")
+        local anchorXEB = MakeEB(grpSec, CX, y, 70)
+        anchorXEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end; s:ClearFocus() end)
+        anchorXEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorX = tonumber(s:GetText()) or 0; RefreshPreview() end end)
+        y = y - RH
+
+        Label(grpSec, LX, y-3, "Y offset:")
+        local anchorYEB = MakeEB(grpSec, CX, y, 70)
+        anchorYEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end; s:ClearFocus() end)
+        anchorYEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.anchorY = tonumber(s:GetText()) or 200; RefreshPreview() end end)
+
         grpSec.Populate = function(e)
             gdDD.Refresh()
             spEB:SetText(tostring(e.spacing or 4))
+            anchorDD.Refresh()
+            anchorXEB:SetText(tostring(e.anchorX or 0))
+            anchorYEB:SetText(tostring(e.anchorY or 200))
             -- Rebuild member list
             for _, c in ipairs({ memberContainer:GetChildren() }) do c:Hide() end
             local mh = 20
@@ -1805,16 +1964,17 @@ function BossModModule:BuildUI(parent, db)
     -- TRIGGER TAB
     -- =============================================
     do
-        local y = -4
-        Label(trigCont, 4, y, "Trigger Type", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 22
+        local y = -8
+        Label(trigCont, LX, y, "Trigger Type", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
+        Label(trigCont, LX, y-3, "Type:")
         local rbTmr = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
-        rbTmr:SetSize(24, 24); rbTmr:SetPoint("TOPLEFT", trigCont, "TOPLEFT", 4, y+3)
-        local rbTmrL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbTmrL:SetPoint("LEFT",rbTmr,"RIGHT",2,0); rbTmrL:SetText("Timer (countdown bar)")
+        rbTmr:SetSize(24, 24); rbTmr:SetPoint("TOPLEFT", trigCont, "TOPLEFT", CX - 2, y)
+        local rbTmrL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbTmrL:SetPoint("LEFT",rbTmr,"RIGHT",2,0); rbTmrL:SetText("Timer")
         local rbAnn = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
-        rbAnn:SetSize(24, 24); rbAnn:SetPoint("LEFT", rbTmrL, "RIGHT", 20, 0)
-        local rbAnnL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbAnnL:SetPoint("LEFT",rbAnn,"RIGHT",2,0); rbAnnL:SetText("Announce (message)")
-        y = y - 28
+        rbAnn:SetSize(24, 24); rbAnn:SetPoint("LEFT", rbTmrL, "RIGHT", 16, 0)
+        local rbAnnL = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormal"); rbAnnL:SetPoint("LEFT",rbAnn,"RIGHT",2,0); rbAnnL:SetText("Announce")
+        y = y - RH
 
         Divider(trigCont, y); y = y - 10
 
@@ -1825,9 +1985,9 @@ function BossModModule:BuildUI(parent, db)
         annSec:SetHeight(120)
         do
             local ay = -4
-            Label(annSec, 4, ay, "Announce Filters", "GameFontNormal"):SetTextColor(0.8,0.8,0.8); ay = ay - 22
-            Label(annSec, 4, ay-3, "Spell ID (blank=any):")
-            local annSI = MakeEB(annSec, 148, ay, 80)
+            Label(annSec, LX, ay, "Announce Filters"); ay = ay - 22
+            Label(annSec, LX, ay-3, "Spell ID:")
+            local annSI = MakeEB(annSec, CX, ay, 80)
             local annSpellIcon = CreateFrame("Button", nil, annSec)
             annSpellIcon:SetSize(22, 22); annSpellIcon:SetPoint("LEFT", annSI, "RIGHT", 4, 0); annSpellIcon:EnableMouse(true)
             local annSITex = annSpellIcon:CreateTexture(nil, "ARTWORK"); annSITex:SetAllPoints(); annSITex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -1850,26 +2010,28 @@ function BossModModule:BuildUI(parent, db)
             annSpellIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)
             annSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annSpellId = s:GetText() end; s:ClearFocus(); UpdateAnnSpellIcon(s:GetText()) end)
             annSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annSpellId = s:GetText() end; UpdateAnnSpellIcon(s:GetText()) end)
-            ay = ay - 26
-            Label(annSec, 4, ay-3, "Message:")
-            local annTxt = MakeEB(annSec, 64, ay, 200)
+            ay = ay - RH
+            Label(annSec, LX, ay-3, "Message:")
+            local annTxt = MakeEB(annSec, CX, ay, 180)
             annTxt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annText = s:GetText() end; s:ClearFocus() end)
             annTxt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annText = s:GetText() end end)
             local opOpts = {{label="Contains",value="find"},{label="Equals",value="=="},{label="Pattern",value="match"}}
             local annOpDD = ScrollDrop(annSec, 90, opOpts,
                 function() return ref.e and ref.e.annTextOp or "find" end,
                 function(v) if ref.e then ref.e.annTextOp = v end end)
-            annOpDD:SetPoint("TOPLEFT", annSec, "TOPLEFT", 272, ay)
-            ay = ay - 26
-            Label(annSec, 4, ay-3, "Count (blank=any):")
-            local annCnt = MakeEB(annSec, 140, ay, 60)
+            annOpDD:SetPoint("LEFT", annTxt, "RIGHT", 4, 0)
+            ay = ay - RH
+            Label(annSec, LX, ay-3, "Count:")
+            local annCnt = MakeEB(annSec, CX, ay, 60)
             annCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annCount = s:GetText() end; s:ClearFocus() end)
             annCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annCount = s:GetText() end end)
-            Label(annSec, 210, ay-3, "Display for:")
-            local annDur = MakeEB(annSec, 284, ay, 44, true)
+            ay = ay - RH
+            Label(annSec, LX, ay-3, "Display for:")
+            local annDur = MakeEB(annSec, CX, ay, 52, true)
             annDur:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.annDuration = tonumber(s:GetText()) or 5 end; s:ClearFocus() end)
             annDur:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.annDuration = tonumber(s:GetText()) or 5 end end)
-            Label(annSec, 334, ay-3, "seconds")
+            local annDurHint = annSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+            annDurHint:SetPoint("LEFT", annDur, "RIGHT", 4, 0); annDurHint:SetText("seconds"); annDurHint:SetTextColor(0.5,0.5,0.5)
             annSec.Populate = function(e)
                 annSI:SetText(e.annSpellId or "")
                 UpdateAnnSpellIcon(e.annSpellId or "")
@@ -1887,9 +2049,9 @@ function BossModModule:BuildUI(parent, db)
         tmrSec:SetHeight(130)
         do
             local ty = -4
-            Label(tmrSec, 4, ty, "Timer Filters", "GameFontNormal"):SetTextColor(0.8,0.8,0.8); ty = ty - 22
-            Label(tmrSec, 4, ty-3, "Spell ID (blank=any):")
-            local tmrSI = MakeEB(tmrSec, 148, ty, 80)
+            Label(tmrSec, LX, ty, "Timer Filters"); ty = ty - 22
+            Label(tmrSec, LX, ty-3, "Spell ID:")
+            local tmrSI = MakeEB(tmrSec, CX, ty, 80)
             local tmrSpellIcon = CreateFrame("Button", nil, tmrSec)
             tmrSpellIcon:SetSize(22, 22); tmrSpellIcon:SetPoint("LEFT", tmrSI, "RIGHT", 4, 0); tmrSpellIcon:EnableMouse(true)
             local tmrSITex = tmrSpellIcon:CreateTexture(nil, "ARTWORK"); tmrSITex:SetAllPoints(); tmrSITex:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -1912,27 +2074,28 @@ function BossModModule:BuildUI(parent, db)
             tmrSpellIcon:SetScript("OnLeave", function() GameTooltip:Hide() end)
             tmrSI:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end; s:ClearFocus(); UpdateTmrSpellIcon(s:GetText()) end)
             tmrSI:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrSpellId = s:GetText() end; UpdateTmrSpellIcon(s:GetText()) end)
-            ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Bar text:")
-            local tmrTxt = MakeEB(tmrSec, 66, ty, 200)
+            ty = ty - RH
+            Label(tmrSec, LX, ty-3, "Bar text:")
+            local tmrTxt = MakeEB(tmrSec, CX, ty, 180)
             tmrTxt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrText = s:GetText() end; s:ClearFocus() end)
             tmrTxt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrText = s:GetText() end end)
             local topOpts = {{label="Contains",value="find"},{label="Equals",value="=="},{label="Pattern",value="match"}}
             local tmrOpDD = ScrollDrop(tmrSec, 90, topOpts,
                 function() return ref.e and ref.e.tmrTextOp or "find" end,
                 function(v) if ref.e then ref.e.tmrTextOp = v end end)
-            tmrOpDD:SetPoint("TOPLEFT", tmrSec, "TOPLEFT", 274, ty)
-            ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Count (blank=any):")
-            local tmrCnt = MakeEB(tmrSec, 140, ty, 60)
+            tmrOpDD:SetPoint("LEFT", tmrTxt, "RIGHT", 4, 0)
+            ty = ty - RH
+            Label(tmrSec, LX, ty-3, "Count:")
+            local tmrCnt = MakeEB(tmrSec, CX, ty, 60)
             tmrCnt:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrCount = s:GetText() end; s:ClearFocus() end)
             tmrCnt:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrCount = s:GetText() end end)
-            ty = ty - 26
-            Label(tmrSec, 4, ty-3, "Show when < ")
-            local tmrRem = MakeEB(tmrSec, 100, ty, 52)
+            ty = ty - RH
+            Label(tmrSec, LX, ty-3, "Show when less than:")
+            local tmrRem = MakeEB(tmrSec, CX, ty, 52)
             tmrRem:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end; s:ClearFocus() end)
             tmrRem:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.tmrRemaining = s:GetText() end end)
-            Label(tmrSec, 158, ty-3, "s remain  (blank = show on start)")
+            local tmrRemHint = tmrSec:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+            tmrRemHint:SetPoint("LEFT", tmrRem, "RIGHT", 4, 0); tmrRemHint:SetText("s remain  (blank = on start)"); tmrRemHint:SetTextColor(0.5,0.5,0.5)
             tmrSec.Populate = function(e)
                 tmrSI:SetText(e.tmrSpellId or "")
                 UpdateTmrSpellIcon(e.tmrSpellId or "")
@@ -1946,10 +2109,12 @@ function BossModModule:BuildUI(parent, db)
         -- Common filters
         local comY = y - 140
         Divider(trigCont, comY); comY = comY - 12
-        Label(trigCont, 4, comY-3, "Boss stage (blank=any):")
-        local stgEB = MakeEB(trigCont, 162, comY, 60)
+        Label(trigCont, LX, comY-3, "Boss stage:")
+        local stgEB = MakeEB(trigCont, CX, comY, 60)
         stgEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.trigStage = s:GetText() end; s:ClearFocus() end)
         stgEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.trigStage = s:GetText() end end)
+        local stgHint = trigCont:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
+        stgHint:SetPoint("LEFT", stgEB, "RIGHT", 4, 0); stgHint:SetText("(blank = any)"); stgHint:SetTextColor(0.5,0.5,0.5)
 
         -- Radio logic
         local function SetTrigType(t)
@@ -1974,11 +2139,11 @@ function BossModModule:BuildUI(parent, db)
     -- LOAD TAB
     -- =============================================
     do
-        local y = -4
+        local y = -8
+
+        Label(loadCont, LX, y-3, "Disable entry:")
         local cbDisable = CreateFrame("CheckButton", nil, loadCont, "UICheckButtonTemplate")
-        cbDisable:SetSize(24, 24); cbDisable:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 4, y+3)
-        local cbDisableL = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormal")
-        cbDisableL:SetPoint("LEFT", cbDisable, "RIGHT", 4, 0); cbDisableL:SetText("Disable")
+        cbDisable:SetSize(24, 24); cbDisable:SetPoint("TOPLEFT", loadCont, "TOPLEFT", CX - 2, y)
         cbDisable:SetScript("OnClick", function(s)
             if not ref.e then return end
             ref.e.disabled = s:GetChecked()
@@ -1989,28 +2154,30 @@ function BossModModule:BuildUI(parent, db)
                 HideEntryFrame(id)
             end
         end)
-        y = y - 32
+        y = y - RH
 
-        Label(loadCont, 4, y, "Load Conditions", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        Divider(loadCont, y); y = y - 12
+
+        Label(loadCont, LX, y, "Load Conditions", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
 
         local note = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
-        note:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 4, y)
-        note:SetText("Entry will not show if any condition below is set and not met.")
-        note:SetTextColor(0.6,0.6,0.6); y = y - 22
+        note:SetPoint("TOPLEFT", loadCont, "TOPLEFT", LX, y)
+        note:SetText("Entry skips if any condition is set and not met.")
+        note:SetTextColor(0.6,0.6,0.6); y = y - 20
 
-        Label(loadCont, 4, y-4, "Class:")
+        Label(loadCont, LX, y-4, "Class:")
         local classes = { {label="Any",value=""}, {label="WARRIOR",value="WARRIOR"}, {label="PALADIN",value="PALADIN"},
             {label="HUNTER",value="HUNTER"}, {label="ROGUE",value="ROGUE"}, {label="PRIEST",value="PRIEST"},
             {label="DEATHKNIGHT",value="DEATHKNIGHT"}, {label="SHAMAN",value="SHAMAN"}, {label="MAGE",value="MAGE"},
             {label="WARLOCK",value="WARLOCK"}, {label="MONK",value="MONK"}, {label="DRUID",value="DRUID"},
             {label="DEMONHUNTER",value="DEMONHUNTER"}, {label="EVOKER",value="EVOKER"} }
-        local clsDD = ScrollDrop(loadCont, 140, classes,
+        local clsDD = ScrollDrop(loadCont, 150, classes,
             function() return ref.e and ref.e.loadClass or "" end,
             function(v) if ref.e then ref.e.loadClass = v end end)
-        clsDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 48, y); y = y - 28
+        clsDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", CX, y); y = y - RH
 
-        Label(loadCont, 4, y-3, "Encounter ID (blank=any):")
-        local encEB = MakeEB(loadCont, 178, y, 90)
+        Label(loadCont, LX, y-3, "Encounter ID:")
+        local encEB = MakeEB(loadCont, CX, y, 100)
         encEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadEncId = s:GetText() end; s:ClearFocus() end)
         encEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadEncId = s:GetText() end end)
         encEB:SetScript("OnEnter", function(self)
@@ -2033,7 +2200,7 @@ function BossModModule:BuildUI(parent, db)
             GameTooltip:Show()
         end)
         encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        y = y - 28
+        y = y - RH
 
         -- Lazily built from the Encounter Journal on first hover; shared by both zone tooltips.
         local zoneListCache = nil
@@ -2066,8 +2233,8 @@ function BossModModule:BuildUI(parent, db)
             return zoneListCache
         end
 
-        Label(loadCont, 4, y-3, "Zone ID (blank=any):")
-        local zoneIdEB = MakeEB(loadCont, 148, y, 90)
+        Label(loadCont, LX, y-3, "Zone ID:")
+        local zoneIdEB = MakeEB(loadCont, CX, y, 100)
         zoneIdEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadZoneId = s:GetText() end; s:ClearFocus() end)
         zoneIdEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadZoneId = s:GetText() end end)
         zoneIdEB:SetScript("OnEnter", function(self)
@@ -2103,29 +2270,29 @@ function BossModModule:BuildUI(parent, db)
             GameTooltip:Show()
         end)
         zoneIdEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        y = y - 28
+        y = y - RH
 
-        Label(loadCont, 4, y-4, "Difficulty:")
+        Label(loadCont, LX, y-4, "Difficulty:")
         local diffs = { {label="Any",value=""}, {label="Normal Raid (14)",value="14"}, {label="Heroic Raid (15)",value="15"},
             {label="Mythic Raid (16)",value="16"}, {label="LFR (17)",value="17"},
             {label="Mythic+ (8)",value="8"}, {label="Normal Dungeon (1)",value="1"},
             {label="Heroic Dungeon (2)",value="2"}, {label="Mythic Dungeon (23)",value="23"} }
-        local diffDD = ScrollDrop(loadCont, 180, diffs,
+        local diffDD = ScrollDrop(loadCont, 190, diffs,
             function() return ref.e and ref.e.loadDiff or "" end,
             function(v) if ref.e then ref.e.loadDiff = v end end)
-        diffDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 72, y); y = y - 28
+        diffDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", CX, y); y = y - RH
 
-        Label(loadCont, 4, y-4, "Role:")
+        Label(loadCont, LX, y-4, "Role:")
         local roles = {
             {label="Any",    value=""},
             {label="Tank",   value="TANK"},
             {label="Healer", value="HEALER"},
             {label="DPS",    value="DAMAGER"},
         }
-        local roleDD = ScrollDrop(loadCont, 120, roles,
+        local roleDD = ScrollDrop(loadCont, 130, roles,
             function() return ref.e and ref.e.loadRole or "" end,
             function(v) if ref.e then ref.e.loadRole = v end end)
-        roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", 40, y)
+        roleDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", CX, y)
 
         loadCont.Populate = function(e)
             cbDisable:SetChecked(e.disabled or false)
@@ -2147,13 +2314,9 @@ function BossModModule:BuildUI(parent, db)
         addRuleBtn:SetPoint("TOPLEFT", condCont, "TOPLEFT", 4, -4)
         addRuleBtn:SetText("+ Add rule")
 
-        local rulesScroll = CreateFrame("ScrollFrame", nil, condCont, "UIPanelScrollFrameTemplate")
-        rulesScroll:SetPoint("TOPLEFT",     addRuleBtn, "BOTTOMLEFT",  0, -4)
-        rulesScroll:SetPoint("BOTTOMRIGHT", condCont,   "BOTTOMRIGHT", -20, 4)
-
-        local rulesChild = CreateFrame("Frame", nil, rulesScroll)
-        rulesChild:SetHeight(1)
-        rulesScroll:SetScrollChild(rulesChild)
+        local rulesChild = CreateFrame("Frame", nil, condCont)
+        rulesChild:SetSize(1, 1)
+        rulesChild:SetPoint("TOPLEFT", addRuleBtn, "BOTTOMLEFT", 0, -4)
 
         local TRIG_OPTS = {
             { label="On show",        value="show" },
@@ -2194,7 +2357,7 @@ function BossModModule:BuildUI(parent, db)
             -- ---- IF row ----
             local ifLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             ifLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -8)
-            ifLbl:SetText("IF"); ifLbl:SetTextColor(0.8, 0.8, 0.5)
+            ifLbl:SetText("IF"); ifLbl:SetTextColor(1, 1, 1)
 
             local trigDD = ScrollDrop(row, 130, TRIG_OPTS,
                 function() return cond.trigger or "show" end,
@@ -2217,7 +2380,7 @@ function BossModModule:BuildUI(parent, db)
             -- ---- THEN row ----
             local thenLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             thenLbl:SetPoint("TOPLEFT", row, "TOPLEFT", 6, -36)
-            thenLbl:SetText("THEN"); thenLbl:SetTextColor(0.8, 0.8, 0.5)
+            thenLbl:SetText("THEN"); thenLbl:SetTextColor(1, 1, 1)
 
             local actDD = ScrollDrop(row, 130, ACT_OPTS,
                 function() return cond.action or "glow" end,
@@ -2417,10 +2580,24 @@ function BossModModule:BuildUI(parent, db)
                 gf:SetScript("OnDragStart", gf.StartMoving)
                 gf:SetScript("OnDragStop", function(self)
                     self:StopMovingOrSizing()
-                    local cx, cy = self:GetCenter(); local ux, uy = UIParent:GetCenter()
-                    if cx and ux then
-                        e.anchorX = math.floor(cx - ux + 0.5)
-                        e.anchorY = math.floor(cy - uy + 0.5)
+                    local fl, fb = self:GetLeft(), self:GetBottom()
+                    local ux, uy = UIParent:GetCenter()
+                    if fl and ux then
+                        local fw, fh = self:GetWidth(), self:GetHeight()
+                        local ap = e.anchorPoint or "CENTER"
+                        local ax, ay
+                        if     ap == "TOP"         then ax = fl + fw/2;  ay = fb + fh
+                        elseif ap == "BOTTOM"      then ax = fl + fw/2;  ay = fb
+                        elseif ap == "LEFT"        then ax = fl;          ay = fb + fh/2
+                        elseif ap == "RIGHT"       then ax = fl + fw;     ay = fb + fh/2
+                        elseif ap == "TOPLEFT"     then ax = fl;          ay = fb + fh
+                        elseif ap == "TOPRIGHT"    then ax = fl + fw;     ay = fb + fh
+                        elseif ap == "BOTTOMLEFT"  then ax = fl;          ay = fb
+                        elseif ap == "BOTTOMRIGHT" then ax = fl + fw;     ay = fb
+                        else                           ax = fl + fw/2;    ay = fb + fh/2
+                        end
+                        e.anchorX = math.floor(ax - ux + 0.5)
+                        e.anchorY = math.floor(ay - uy + 0.5)
                     end
                 end)
                 gf:Show()
@@ -2456,10 +2633,24 @@ function BossModModule:BuildUI(parent, db)
                 pf:SetScript("OnDragStart", pf.StartMoving)
                 pf:SetScript("OnDragStop", function(self)
                     self:StopMovingOrSizing()
-                    local cx, cy = self:GetCenter(); local ux, uy = UIParent:GetCenter()
-                    if cx and ux then
-                        e.anchorX = math.floor(cx - ux + 0.5)
-                        e.anchorY = math.floor(cy - uy + 0.5)
+                    local fl, fb = self:GetLeft(), self:GetBottom()
+                    local ux, uy = UIParent:GetCenter()
+                    if fl and ux then
+                        local fw, fh = self:GetWidth(), self:GetHeight()
+                        local ap = e.anchorPoint or "CENTER"
+                        local ax, ay
+                        if     ap == "TOP"         then ax = fl + fw/2;  ay = fb + fh
+                        elseif ap == "BOTTOM"      then ax = fl + fw/2;  ay = fb
+                        elseif ap == "LEFT"        then ax = fl;          ay = fb + fh/2
+                        elseif ap == "RIGHT"       then ax = fl + fw;     ay = fb + fh/2
+                        elseif ap == "TOPLEFT"     then ax = fl;          ay = fb + fh
+                        elseif ap == "TOPRIGHT"    then ax = fl + fw;     ay = fb + fh
+                        elseif ap == "BOTTOMLEFT"  then ax = fl;          ay = fb
+                        elseif ap == "BOTTOMRIGHT" then ax = fl + fw;     ay = fb
+                        else                           ax = fl + fw/2;    ay = fb + fh/2
+                        end
+                        e.anchorX = math.floor(ax - ux + 0.5)
+                        e.anchorY = math.floor(ay - uy + 0.5)
                     end
                 end)
             end
