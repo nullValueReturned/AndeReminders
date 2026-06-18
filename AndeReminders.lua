@@ -114,12 +114,12 @@ local function SelectTab(index)
         if entry.contentFrame then
             if i == index then
                 entry.contentFrame:Show()
-                entry.tabButton:SetBackdropColor(0.15, 0.35, 0.7, 1)
-                entry.tabButton:SetBackdropBorderColor(0.5, 0.6, 0.9, 1)
+                entry.tabButton:SetBackdropColor(0.18, 0.38, 0.72, 0.92)
+                entry.tabButton:SetBackdropBorderColor(0.55, 0.65, 0.92, 0.95)
             else
                 entry.contentFrame:Hide()
-                entry.tabButton:SetBackdropColor(0.05, 0.05, 0.05, 1)
-                entry.tabButton:SetBackdropBorderColor(0.25, 0.25, 0.25, 1)
+                entry.tabButton:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
+                entry.tabButton:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
             end
         end
     end
@@ -152,7 +152,7 @@ function AR:CreateSettingsWindow()
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
     local titleDiv = f:CreateTexture(nil, "ARTWORK")
-    titleDiv:SetColorTexture(0.35, 0.35, 0.35, 0.8)
+    titleDiv:SetColorTexture(0.4, 0.45, 0.55, 0.7)
     titleDiv:SetHeight(1)
     titleDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -37)
     titleDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -37)
@@ -178,8 +178,8 @@ function AR:CreateSettingsWindow()
             edgeFile = "Interface/Buttons/WHITE8x8",
             edgeSize = 1,
         })
-        tab:SetBackdropColor(0.05, 0.05, 0.05, 1)
-        tab:SetBackdropBorderColor(0.25, 0.25, 0.25, 1)
+        tab:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
+        tab:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
 
         local tabText = tab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         tabText:SetAllPoints(tab)
@@ -197,8 +197,8 @@ function AR:CreateSettingsWindow()
             edgeFile = "Interface/Buttons/WHITE8x8",
             edgeSize = 1,
         })
-        content:SetBackdropColor(0.04, 0.04, 0.04, 0.92)
-        content:SetBackdropBorderColor(0.25, 0.25, 0.25, 1)
+        content:SetBackdropColor(0.08, 0.10, 0.16, 0.85)
+        content:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
         content:Hide()
 
         entry.contentFrame = content
@@ -210,12 +210,12 @@ function AR:CreateSettingsWindow()
         local tabIndex = i
         tab:SetScript("OnEnter", function(self)
             if activeTabIndex ~= tabIndex then
-                self:SetBackdropColor(0.1, 0.2, 0.45, 1)
+                self:SetBackdropColor(0.12, 0.22, 0.50, 0.92)
             end
         end)
         tab:SetScript("OnLeave", function(self)
             if activeTabIndex ~= tabIndex then
-                self:SetBackdropColor(0.05, 0.05, 0.05, 1)
+                self:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
             end
         end)
         tab:SetScript("OnClick", function()
