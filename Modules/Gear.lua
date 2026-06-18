@@ -83,6 +83,28 @@ local GearModule = {}
 local checkTimer = nil
 local alertFrame = nil
 local durabilityWarnFrame = nil
+local scanTooltip = nil
+
+local function GetScanTooltip()
+    if scanTooltip then return scanTooltip end
+    scanTooltip = CreateFrame("GameTooltip", "AndeRemindersScanTooltip", nil, "GameTooltipTemplate")
+    scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
+    return scanTooltip
+end
+
+local function CloakHasOnUse(link)
+    local tip = GetScanTooltip()
+    tip:ClearLines()
+    tip:SetHyperlink(link)
+    for i = 1, tip:NumLines() do
+        local lineLeft = _G["AndeRemindersScanTooltipTextLeft" .. i]
+        if lineLeft then
+            local text = lineLeft:GetText()
+            if text and text:find("^Use:") then return true end
+        end
+    end
+    return false
+end
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -98,7 +120,8 @@ function GearModule:InitDB(db)
     if db.gear.checks.weaponStat    == nil then db.gear.checks.weaponStat    = true end
     if db.gear.checks.lowIlvl       == nil then db.gear.checks.lowIlvl       = true end
     if db.gear.checks.lowDurability == nil then db.gear.checks.lowDurability = true end
-    if db.gear.lowIlvlThreshold     == nil then db.gear.lowIlvlThreshold     = 50   end
+    if db.gear.checks.cloakGlider  == nil then db.gear.checks.cloakGlider   = true end
+    if db.gear.lowIlvlThreshold    == nil then db.gear.lowIlvlThreshold     = 50   end
 end
 
 -- ---------------------------------------------------------------------------
@@ -234,6 +257,25 @@ function GearModule:CheckLowItemLevel(threshold)
     return issues
 end
 
+function GearModule:CheckCloakGlider()
+    local p1, p2 = GetProfessions()
+    local isEngineer = false
+    for _, idx in ipairs({p1, p2}) do
+        if idx then
+            local _, _, _, _, _, _, skillLine = GetProfessionInfo(idx)
+            if skillLine == 202 then isEngineer = true; break end
+        end
+    end
+    if not isEngineer then return nil end
+    if not IsSpellKnown(126392) then return nil end
+    local link = GetInventoryItemLink("player", 15)
+    if not link then return nil end
+    if not CloakHasOnUse(link) then
+        return "Missing cloak glider enchant"
+    end
+    return nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Durability warning frame (separate anchor from gear alerts)
 -- ---------------------------------------------------------------------------
@@ -311,6 +353,11 @@ function GearModule:RunCheck()
         for _, v in ipairs(self:CheckLowItemLevel(db.gear.lowIlvlThreshold or 50)) do
             table.insert(issues, v)
         end
+    end
+
+    if db.gear.checks.cloakGlider then
+        local gliderIssue = self:CheckCloakGlider()
+        if gliderIssue then table.insert(issues, gliderIssue) end
     end
 
     if #issues == 0 then
@@ -490,6 +537,16 @@ function GearModule:BuildUI(parent, db)
     local lDur = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     lDur:SetPoint("LEFT", cbDur, "RIGHT", 6, 0)
     lDur:SetText("Low durability warning (<50%, persists until repaired)")
+
+    local cbCG = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    cbCG:SetSize(22, 22)
+    cbCG:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 4 - 68)
+    cbCG:SetChecked(db.gear.checks.cloakGlider)
+    cbCG:SetScript("OnClick", function(self) db.gear.checks.cloakGlider = self:GetChecked() end)
+
+    local lCG = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lCG:SetPoint("LEFT", cbCG, "RIGHT", 6, 0)
+    lCG:SetText("Missing Goblin Glider cloak tinker (Engineering)")
 end
 
 AR:RegisterModule("Gear", GearModule)
