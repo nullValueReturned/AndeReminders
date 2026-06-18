@@ -1,4 +1,4 @@
-## Interface: 120001, 120005
+## Interface: 120001, 120005, 120007
 ## Title: AndeReminders
 ## Notes: Modular reminder addon for enchants, repairs, and more
 ## Author:
