@@ -100,7 +100,7 @@ local function CloakHasOnUse(link)
         local lineLeft = _G["AndeRemindersScanTooltipTextLeft" .. i]
         if lineLeft then
             local text = lineLeft:GetText()
-            if text and text:find("^Use:") then return true end
+            if text and text:find("Use:") then return true end
         end
     end
     return false
@@ -259,14 +259,12 @@ end
 
 function GearModule:CheckCloakGlider()
     local p1, p2 = GetProfessions()
-    local isEngineer = false
-    for _, idx in ipairs({p1, p2}) do
-        if idx then
-            local _, _, _, _, _, _, skillLine = GetProfessionInfo(idx)
-            if skillLine == 202 then isEngineer = true; break end
-        end
+    local function hasEngSkill(idx)
+        if not idx then return false end
+        local _, _, _, _, _, _, skillLine = GetProfessionInfo(idx)
+        return skillLine == 202
     end
-    if not isEngineer then return nil end
+    if not (hasEngSkill(p1) or hasEngSkill(p2)) then return nil end
     if not IsSpellKnown(126392) then return nil end
     local link = GetInventoryItemLink("player", 15)
     if not link then return nil end
