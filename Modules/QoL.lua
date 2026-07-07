@@ -133,6 +133,7 @@ function QoLModule:InitDB(db)
     if not LDBIcon:IsRegistered(LDB_NAME) then
         LDBIcon:Register(LDB_NAME, vaultDataObject, db.qol.greatVault)
     end
+    LDBIcon:Refresh(LDB_NAME, db.qol.greatVault)
 end
 
 -- ---------------------------------------------------------------------------
@@ -157,7 +158,7 @@ function QoLModule:BuildUI(parent, db)
         local show = self:GetChecked()
         db.qol.greatVault.hide = not show
         if LDBIcon then
-            if show then LDBIcon:Show(LDB_NAME) else LDBIcon:Hide(LDB_NAME) end
+            LDBIcon:Refresh(LDB_NAME, db.qol.greatVault)
         end
     end)
 
