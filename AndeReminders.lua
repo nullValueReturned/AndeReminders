@@ -252,7 +252,6 @@ eventFrame:SetScript("OnEvent", function(self, event, addonName)
     if event == "ADDON_LOADED" and addonName == "AndeReminders" then
         AR:InitDB()
         AR:CreateAnchors()
-        AR:CreateSettingsWindow()
         self:UnregisterEvent("ADDON_LOADED")
     end
 end)
