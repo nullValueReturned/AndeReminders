@@ -1,16 +1,16 @@
-## Interface: 120001, 120005
+## Interface: 120001, 120005, 120007
 ## Title: AndeReminders
 ## Notes: Modular reminder addon for enchants, repairs, and more
 ## Author:
 ## Version: 1.0
 ## SavedVariables: AndeRemindersDB
-## OptionalDeps: LibSharedMedia-3.0
 
 Libs\LibStub\LibStub.lua
 Libs\LibCustomGlow-1.0\LibCustomGlow-1.0.lua
 Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
 Libs\LibDataBroker-1.1\LibDataBroker-1.1.lua
 Libs\LibDBIcon-1.0\LibDBIcon-1.0.lua
+Libs\LibSharedMedia-3.0\LibSharedMedia-3.0.lua
 
 AndeReminders.lua
 Modules\Enchants.lua
