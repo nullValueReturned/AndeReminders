@@ -265,7 +265,8 @@ function GearModule:CheckCloakGlider()
         return skillLine == 202
     end
     if not (hasEngSkill(p1) or hasEngSkill(p2)) then return nil end
-    if not IsSpellKnown(162204) then return nil end
+    local recipeInfo = C_TradeSkillUI.GetRecipeInfo(126392)
+    if not (recipeInfo and recipeInfo.learned) then return nil end
     local link = GetInventoryItemLink("player", 15)
     if not link then return nil end
     if not CloakHasOnUse(link) then
