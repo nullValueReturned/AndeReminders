@@ -19,3 +19,4 @@ Modules\Talents.lua
 Modules\Encounter.lua
 Modules\QoL.lua
 Modules\BossMods.lua
+Modules\WorldMarkers.lua
