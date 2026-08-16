@@ -9,17 +9,29 @@ local WorldMarkersModule = {}
 local BUTTON_PREFIX     = "AndeRemindersWM"
 local CLEAR_BUTTON_NAME = "AndeRemindersWMClear"
 
+-- World marker indices (/wm N) do NOT follow the same order as raid target
+-- icons (/raid_target N). This mapping was confirmed in-game:
+--   1 Blue Square, 2 Green Triangle, 3 Purple Diamond, 4 Red Cross,
+--   5 Yellow Star, 6 Orange Circle, 7 Pale Blue Moon, 8 White Skull
 local ACTIONS = {
-    { key = "star",     label = "Star",     bindingTarget = "CLICK " .. BUTTON_PREFIX .. "1:LeftButton" },
-    { key = "circle",   label = "Circle",   bindingTarget = "CLICK " .. BUTTON_PREFIX .. "2:LeftButton" },
-    { key = "diamond",  label = "Diamond",  bindingTarget = "CLICK " .. BUTTON_PREFIX .. "3:LeftButton" },
-    { key = "triangle", label = "Triangle", bindingTarget = "CLICK " .. BUTTON_PREFIX .. "4:LeftButton" },
-    { key = "moon",     label = "Moon",     bindingTarget = "CLICK " .. BUTTON_PREFIX .. "5:LeftButton" },
-    { key = "square",   label = "Square",   bindingTarget = "CLICK " .. BUTTON_PREFIX .. "6:LeftButton" },
-    { key = "cross",    label = "Cross",    bindingTarget = "CLICK " .. BUTTON_PREFIX .. "7:LeftButton" },
-    { key = "skull",    label = "Skull",    bindingTarget = "CLICK " .. BUTTON_PREFIX .. "8:LeftButton" },
-    { key = "clearAll", label = "Clear All Markers", bindingTarget = "CLICK " .. CLEAR_BUTTON_NAME .. ":LeftButton" },
+    { key = "star",     label = "Star (Yellow)",       index = 5 },
+    { key = "circle",   label = "Circle (Orange)",     index = 6 },
+    { key = "diamond",  label = "Diamond (Purple)",    index = 3 },
+    { key = "triangle", label = "Triangle (Green)",    index = 2 },
+    { key = "moon",     label = "Moon (Pale Blue)",    index = 7 },
+    { key = "square",   label = "Square (Blue)",       index = 1 },
+    { key = "cross",    label = "Cross (Red)",         index = 4 },
+    { key = "skull",    label = "Skull (White)",       index = 8 },
+    { key = "clearAll", label = "Clear All Markers" },
 }
+
+for _, action in ipairs(ACTIONS) do
+    if action.key == "clearAll" then
+        action.bindingTarget = "CLICK " .. CLEAR_BUTTON_NAME .. ":LeftButton"
+    else
+        action.bindingTarget = "CLICK " .. BUTTON_PREFIX .. action.index .. ":LeftButton"
+    end
+end
 
 local markerButtons = {}
 local clearButton
@@ -61,7 +73,7 @@ local function EnsureButtons(useCursor)
     end
     clearButton = CreateFrame("Button", CLEAR_BUTTON_NAME, nil, "SecureActionButtonTemplate")
     clearButton:SetAttribute("type", "macro")
-    clearButton:SetAttribute("macrotext", SLASH_CLEAR_WORLD_MARKER1 .. " 0")
+    clearButton:SetAttribute("macrotext", SLASH_CLEAR_WORLD_MARKER1 .. " all")
     clearButton:RegisterForClicks("AnyUp", "AnyDown")
 
     ApplyMarkerMode(useCursor)
