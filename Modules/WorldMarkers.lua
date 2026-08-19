@@ -200,7 +200,9 @@ function WorldMarkersModule:InitDB(db)
     if not db.worldMarkers.keybinds then db.worldMarkers.keybinds = {} end
 
     EnsureButtons(db.worldMarkers.useCursor)
-    ApplyAllBindings(db)
+    -- Bindings are (re)applied on PLAYER_ENTERING_WORLD, not here: Blizzard
+    -- restores the saved binding set around login/reload, which would wipe
+    -- out any SetBinding call made this early (during ADDON_LOADED).
 end
 
 -- ---------------------------------------------------------------------------
@@ -302,8 +304,13 @@ end
 
 local wmEvents = CreateFrame("Frame")
 wmEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
-wmEvents:SetScript("OnEvent", function()
-    if pendingModeApply and AR.db and AR.db.worldMarkers then
+wmEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
+wmEvents:SetScript("OnEvent", function(_, event)
+    if event == "PLAYER_ENTERING_WORLD" then
+        if AR.db and AR.db.worldMarkers then
+            ApplyAllBindings(AR.db)
+        end
+    elseif pendingModeApply and AR.db and AR.db.worldMarkers then
         ApplyMarkerMode(AR.db.worldMarkers.useCursor)
     end
 end)
