@@ -409,11 +409,15 @@ do
             wipe(bwBars)
             wipe(dbmBars)
         elseif ev == "ADDON_LOADED" then
-            if a1 == "BigWigsLoader" then RegisterBW()  end
-            if a1 == "DBM-Core"      then RegisterDBM() end
+            RegisterBW()
+            RegisterDBM()
         end
     end)
 end
+
+-- Cover the case where BigWigs/DBM already finished loading before this file ran
+RegisterBW()
+RegisterDBM()
 
 -- =============================================================================
 -- Display text formatter (%m=bossmod message, %c=count, %t=time remaining)
