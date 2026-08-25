@@ -299,18 +299,31 @@ local bwReg  = false
 -- BigWigsLoader.RegisterMessage fires (event, arg1, arg2, ...) with no handler
 -- prepended — event name is the first arg, BigWigs payload follows directly.
 
+-- WoW 12.1+ can hand back "secret" string values for spoiler-sensitive boss
+-- text; reading them (:lower, :match, etc.) from addon code throws a taint
+-- error ("attempt to index ... a secret string value"). Probe with a cheap
+-- no-op string method inside pcall and fall back to "" for anything unreadable
+-- so a secret value never reaches our matching/display code.
+local function SafeText(text)
+    if text == nil then return "" end
+    local ok, safe = pcall(function() return text:sub(1) end)
+    return ok and safe or ""
+end
+
 local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
     local now = GetTime()
-    local d = { source="bw", spellId=tostring(spellId or ""), text=text or "",
+    text = SafeText(text)
+    local d = { source="bw", spellId=tostring(spellId or ""), text=text,
         duration=duration or 0, expirationTime=now+(duration or 0),
         icon=icon, count=tostring(count or "0") }
-    bwBars[text or ""] = d
+    bwBars[text] = d
     HandleTimerStart(d)
 end
 
 local function OnBWStopBar(_, _, text)
     -- event, addon, text
-    bwBars[text or ""] = nil; HandleTimerStop(text or "")
+    text = SafeText(text)
+    bwBars[text] = nil; HandleTimerStop(text)
 end
 
 local function OnBWStopBars()
@@ -319,9 +332,10 @@ end
 
 local function OnBWMessage(_, _, spellId, text, _, icon)
     -- event, addon, spellId, text, type, icon
-    local count = (text and (text:match("%((%d+)%)") or text:match("（(%d+)）"))) or "0"
+    text = SafeText(text)
+    local count = text:match("%((%d+)%)") or text:match("（(%d+)）") or "0"
     HandleAnnounce({ source="bw", spellId=tostring(spellId or ""),
-        text=text or "", icon=icon, count=count })
+        text=text, icon=icon, count=count })
 end
 
 local function OnBWSetStage(_, _, stage) bwStage = stage or 0 end
@@ -357,12 +371,12 @@ local function RegisterDBM()
     dbmReg = true
     DBM:RegisterCallback("DBM_Announce", function(_, msg, icon, _, spellId, _, _, count)
         HandleAnnounce({ source="dbm", spellId=tostring(spellId or ""),
-            text=msg or "", icon=icon, count=tostring(count or "0") })
+            text=SafeText(msg), icon=icon, count=tostring(count or "0") })
     end)
     DBM:RegisterCallback("DBM_TimerBegin", function(_, timerId, msg, dur, icon, _,
         spellId, _, _, _, _, _, _, count)
         local now = GetTime()
-        local d = { source="dbm", spellId=tostring(spellId or ""), text=msg or "",
+        local d = { source="dbm", spellId=tostring(spellId or ""), text=SafeText(msg),
             timerId=timerId, duration=dur or 0, expirationTime=now+(dur or 0),
             icon=icon, count=tostring(count or "0") }
         dbmBars[timerId] = d; HandleTimerStart(d)
