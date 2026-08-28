@@ -35,6 +35,10 @@ local function GetSoundPath(n) return LSM and LSM:Fetch("sound", n) end
 
 local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
+-- Export/import string pipeline: Serialize -> Deflate-compress -> print-safe encode
+local LibSerialize = LibStub and LibStub("LibSerialize", true)
+local LibDeflate   = LibStub and LibStub("LibDeflate", true)
+
 -- =============================================================================
 -- Entry defaults
 -- =============================================================================
@@ -120,6 +124,91 @@ local function DeleteEntry(id)
     end
     db.entries[id] = nil
     if entryFrames[id] then entryFrames[id]:Hide(); entryFrames[id] = nil end
+end
+
+-- =============================================================================
+-- Export / Import
+-- =============================================================================
+
+local EXPORT_PREFIX = "ARBM1:" -- format tag; also keeps the string out of
+                                -- LibDeflate's print-safe alphabet check below
+
+local ENTRY_EXPORT_SKIP = { id = true, groupId = true, children = true }
+
+local function EntrySnapshot(e)
+    local snap = {}
+    for k, v in pairs(e) do
+        if not ENTRY_EXPORT_SKIP[k] then snap[k] = v end
+    end
+    return snap
+end
+
+-- A lone entry exports itself; a group exports itself plus every child so
+-- pasting the string elsewhere recreates the whole set.
+local function BuildExportPayload(id)
+    local db = AR.db.bossmods
+    local e = db.entries[id]; if not e then return nil end
+    if e.type == "group" then
+        local children = {}
+        for _, cid in ipairs(e.children) do
+            local ce = db.entries[cid]
+            if ce then children[#children + 1] = EntrySnapshot(ce) end
+        end
+        return { kind = "group", entry = EntrySnapshot(e), children = children }
+    end
+    return { kind = "entry", entry = EntrySnapshot(e) }
+end
+
+local function EncodeExport(payload)
+    if not LibSerialize or not LibDeflate then return nil, "Missing LibSerialize/LibDeflate" end
+    local serialized = LibSerialize:Serialize(payload)
+    local compressed = LibDeflate:CompressDeflate(serialized, { level = 5 })
+    return EXPORT_PREFIX .. LibDeflate:EncodeForPrint(compressed)
+end
+
+local function DecodeImport(str)
+    if not LibSerialize or not LibDeflate then return nil, "Missing LibSerialize/LibDeflate" end
+    str = (str or ""):match("^%s*(.-)%s*$")
+    if str:sub(1, #EXPORT_PREFIX) ~= EXPORT_PREFIX then
+        return nil, "Not a recognized AndeReminders bossmod export string"
+    end
+    local decoded = LibDeflate:DecodeForPrint(str:sub(#EXPORT_PREFIX + 1))
+    if not decoded then return nil, "Corrupted export string" end
+    local serialized = LibDeflate:DecompressDeflate(decoded)
+    if not serialized then return nil, "Corrupted export string" end
+    local ok, payload = LibSerialize:Deserialize(serialized)
+    if not ok or type(payload) ~= "table" or (payload.kind ~= "entry" and payload.kind ~= "group") then
+        return nil, "Corrupted export string"
+    end
+    return payload
+end
+
+-- Recreates the payload's entry (and children, for a group) as brand-new
+-- top-level entries with fresh ids. Returns the new top-level entry's id.
+local function ImportPayload(payload)
+    local db = AR.db.bossmods
+
+    local function Spawn(snap, groupId)
+        local e = NewEntry(snap.type, groupId)
+        for k, v in pairs(snap) do e[k] = v end
+        e.groupId = groupId
+        return e
+    end
+
+    if payload.kind == "group" then
+        local g = Spawn(payload.entry, nil)
+        g.children = {}
+        table.insert(db.topLevel, 1, g.id)
+        for _, csnap in ipairs(payload.children) do
+            local ce = Spawn(csnap, g.id)
+            table.insert(g.children, ce.id)
+        end
+        return g.id
+    end
+
+    local e = Spawn(payload.entry, nil)
+    table.insert(db.topLevel, 1, e.id)
+    return e.id
 end
 
 -- =============================================================================
@@ -1185,6 +1274,99 @@ local function ShowIconPicker(callback, currentPath)
 end
 
 -- =============================================================================
+-- Export / Import popups
+-- =============================================================================
+
+local exportPopup, importPopup
+
+local function BuildCopyDialog(titleText)
+    local W, H = 480, 260
+    local f = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+    f:SetSize(W, H); f:SetPoint("CENTER", UIParent, "CENTER")
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetMovable(true); f:EnableMouse(true)
+    f:RegisterForDrag("LeftButton")
+    f:SetScript("OnDragStart", f.StartMoving)
+    f:SetScript("OnDragStop",  f.StopMovingOrSizing)
+    f:SetBackdrop({
+        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
+        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
+        edgeSize = 24, tile = true, tileSize = 32,
+        insets   = { left=6, right=6, top=6, bottom=6 },
+    })
+    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", f, "TOP", 0, -14); title:SetText(titleText)
+
+    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -2, -2)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    local sf = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+    sf:SetPoint("TOPLEFT",     f, "TOPLEFT",     14, -44)
+    sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30,  46)
+
+    local eb = CreateFrame("EditBox", nil, sf)
+    eb:SetMultiLine(true)
+    eb:SetFontObject("ChatFontNormal")
+    eb:SetWidth(W - 60)
+    eb:SetAutoFocus(false)
+    eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+    sf:SetScrollChild(eb)
+
+    f:Hide()
+    return f, eb
+end
+
+local function ShowExportPopup(str)
+    if not exportPopup then
+        local f, eb = BuildCopyDialog("Export String")
+        local hint = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        hint:SetPoint("BOTTOM", f, "BOTTOM", 0, 14)
+        hint:SetText("Ctrl+A to select, Ctrl+C to copy")
+        hint:SetTextColor(0.6, 0.6, 0.6)
+        f.eb = eb
+        exportPopup = f
+    end
+    exportPopup.eb:SetText(str)
+    exportPopup.eb:HighlightText()
+    exportPopup:Show()
+    exportPopup.eb:SetFocus()
+end
+
+local function ShowImportPopup(onImport)
+    if not importPopup then
+        local f, eb = BuildCopyDialog("Import String")
+        local err = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        err:SetPoint("BOTTOM", f, "BOTTOM", 0, 40)
+        err:SetTextColor(1, 0.3, 0.3)
+
+        local goBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+        goBtn:SetSize(100, 22)
+        goBtn:SetPoint("BOTTOM", f, "BOTTOM", 0, 12)
+        goBtn:SetText("Import")
+        goBtn:SetScript("OnClick", function()
+            local payload, errMsg = DecodeImport(eb:GetText())
+            if not payload then
+                err:SetText(errMsg or "Could not decode string")
+                return
+            end
+            f:Hide()
+            if f.onImport then f.onImport(payload) end
+        end)
+
+        f.eb, f.err = eb, err
+        importPopup = f
+    end
+    importPopup.eb:SetText("")
+    importPopup.err:SetText("")
+    importPopup.onImport = onImport
+    importPopup:Show()
+    importPopup.eb:SetFocus()
+end
+
+-- =============================================================================
 -- BuildUI
 -- =============================================================================
 
@@ -1214,8 +1396,21 @@ function BossModModule:BuildUI(parent, db)
     addBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, -5)
     addBtn:SetText("+ Add New")
 
+    local importBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    importBtn:SetSize(SB_W - 10, 22)
+    importBtn:SetPoint("TOPLEFT", addBtn, "BOTTOMLEFT", 0, -4)
+    importBtn:SetText("Import")
+    importBtn:SetScript("OnClick", function()
+        ShowImportPopup(function(payload)
+            local newId = ImportPayload(payload)
+            RefreshSidebar()
+            local e = db.bossmods.entries[newId]
+            if e then SelectEntry(e) end
+        end)
+    end)
+
     local scrollFrame = CreateFrame("ScrollFrame", nil, parent, "UIPanelScrollFrameTemplate")
-    scrollFrame:SetPoint("TOPLEFT",     addBtn,  "BOTTOMLEFT",  0, -4)
+    scrollFrame:SetPoint("TOPLEFT",     importBtn,  "BOTTOMLEFT",  0, -4)
     scrollFrame:SetPoint("BOTTOMRIGHT", parent,  "BOTTOMLEFT",  SB_W - 20, -4)
 
     local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -2826,16 +3021,25 @@ function BossModModule:BuildUI(parent, db)
             RefreshSidebar()
         end
 
+        local function doExport()
+            CloseCtx()
+            local payload = BuildExportPayload(e.id)
+            local str = payload and EncodeExport(payload)
+            if str then ShowExportPopup(str) end
+        end
+
         -- Build item list -----------------------------------------------
         local defs = {}
         if e.type == "group" then
             defs[1] = { text = "Duplicate",              fn = doDuplicate }
-            defs[2] = { text = "Delete group + children", fn = doDelete }
+            defs[2] = { text = "Export group",           fn = doExport }
+            defs[3] = { text = "Delete group + children", fn = doDelete }
         else
             defs[1] = { text = "Duplicate", fn = doDuplicate }
+            defs[2] = { text = "Export",    fn = doExport }
 
             if e.groupId then
-                defs[2] = { text = "Remove from group", fn = function()
+                defs[#defs + 1] = { text = "Remove from group", fn = function()
                     CloseCtx()
                     local pg = db.bossmods.entries[e.groupId]
                     if pg then
@@ -2854,7 +3058,7 @@ function BossModModule:BuildUI(parent, db)
                 end
                 table.sort(groups, function(a, b) return (a.name or "") < (b.name or "") end)
                 if #groups > 0 then
-                    defs[2] = { text = "Add to group  >", groups = groups }
+                    defs[#defs + 1] = { text = "Add to group  >", groups = groups }
                 end
             end
 
