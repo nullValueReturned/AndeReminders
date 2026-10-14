@@ -1,4 +1,5 @@
-local AR = AndeReminders
+local AR   = AndeReminders
+local Util = AR.Util
 
 local ENCHANTABLE_SLOTS = {
     { id = 1,  name = "Head"      },
@@ -12,9 +13,15 @@ local ENCHANTABLE_SLOTS = {
     { id = 17, name = "Off Hand"  },
 }
 
+local OFF_HAND    = 17
+local ARMOR_CLASS = 4  -- shields and held-in-off-hand items cannot be enchanted
+
 local EnchantModule = {}
-local checkTimer    = nil
-local alertFrame    = nil
+local needsRecheck = false  -- a scheduled check was skipped because the player was in combat
+
+local enchantAlert = AR.UI.CreateAlert({
+    name = "AndeRemindersEnchantAlert", anchor = "enchants", width = 360, fallbackY = -220,
+})
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -38,57 +45,8 @@ function EnchantModule:InitDB(db)
     end
 end
 
--- ---------------------------------------------------------------------------
--- Alert frame
--- ---------------------------------------------------------------------------
-
-local function GetAlertFrame()
-    if alertFrame then return alertFrame end
-
-    alertFrame = CreateFrame("Frame", "AndeRemindersEnchantAlert", UIParent, "BackdropTemplate")
-    alertFrame:SetSize(360, 80)
-
-    local anchor = AR.anchorFrames and AR.anchorFrames["enchants"]
-    if anchor then
-        alertFrame:SetPoint("CENTER", anchor, "CENTER", 0, 0)
-    else
-        alertFrame:SetPoint("TOP", UIParent, "TOP", 0, -220)
-    end
-
-    alertFrame:EnableMouse(true)
-    alertFrame:SetFrameStrata("MEDIUM")
-    alertFrame:SetBackdrop({
-        bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
-        tile = true, tileSize = 32,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
-    alertFrame:Hide()
-
-    local header = alertFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    header:SetPoint("TOPLEFT", alertFrame, "TOPLEFT", 10, -10)
-    header:SetText("|cFFFF6600AR|r")
-    alertFrame.header = header
-
-    local body = alertFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    body:SetPoint("TOPLEFT",  alertFrame, "TOPLEFT",  10, -26)
-    body:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", -10, -26)
-    body:SetJustifyH("LEFT")
-    body:SetWordWrap(true)
-    alertFrame.body = body
-
-    local closeBtn = CreateFrame("Button", nil, alertFrame, "UIPanelCloseButton")
-    closeBtn:SetSize(20, 20)
-    closeBtn:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", 2, 2)
-    closeBtn:SetScript("OnClick", function() alertFrame:Hide() end)
-
-    return alertFrame
-end
-
 function EnchantModule:ShowAlert(text)
-    local af = GetAlertFrame()
-    af.body:SetText(text)
-    af:SetHeight(af.body:GetHeight() + 44)
-    af:Show()
+    enchantAlert:Show(text)
 end
 
 -- ---------------------------------------------------------------------------
@@ -99,22 +57,16 @@ function EnchantModule:CheckSlot(slotId)
     local link = GetInventoryItemLink("player", slotId)
     if not link then return false end
 
-    if slotId == 17 then
-        local _, _, _, _, _, _, _, _, _, _, _, classId = GetItemInfo(link)
-        if classId == 4 then return false end
+    if slotId == OFF_HAND then
+        local _, classID = Util.GetItemType(link)
+        if classID == ARMOR_CLASS then return false end
     end
 
-    local _, enchantStr = link:match("item:(%d+):(%d+)")
-    local enchantId = tonumber(enchantStr) or 0
-    return enchantId == 0
+    return Util.GetLinkEnchantID(link) == 0
 end
 
 function EnchantModule:GetSlotItemLevel(slotId)
-    local link = GetInventoryItemLink("player", slotId)
-    if not link then return 0 end
-    local name, _, _, itemLevel = GetItemInfo(link)
-    if not name then return 0 end
-    return itemLevel or 0
+    return Util.GetEquippedItemLevel(slotId) or 0
 end
 
 function EnchantModule:CheckAll(db)
@@ -138,12 +90,16 @@ function EnchantModule:CheckAll(db)
 end
 
 function EnchantModule:RunCheck()
-    if UnitLevel("player") < 90 then return end
+    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
     if not AR.db then return end
-    if InCombatLockdown() then return end
+    if InCombatLockdown() then
+        needsRecheck = true
+        return
+    end
+    needsRecheck = false
     local missing = self:CheckAll(AR.db)
     if #missing == 0 then
-        if alertFrame and alertFrame:IsShown() then alertFrame:Hide() end
+        enchantAlert:Hide()
         return
     end
 
@@ -151,20 +107,16 @@ function EnchantModule:RunCheck()
     local slots  = table.concat(missing, ", ")
 
     if notify.chat then
-        print("|cFFFF6600[AndeReminders]|r Missing enchant: " .. slots)
+        Util.Print("Missing enchant: " .. slots)
     end
     if notify.screen then
         self:ShowAlert("|cFFFFCC00Missing enchant:|r\n" .. slots)
     end
 end
 
-local function ScheduleCheck()
-    if checkTimer then checkTimer:Cancel() end
-    checkTimer = C_Timer.NewTimer(2, function()
-        checkTimer = nil
-        EnchantModule:RunCheck()
-    end)
-end
+local ScheduleCheck = Util.Debounce(2, function()
+    EnchantModule:RunCheck()
+end)
 
 -- ---------------------------------------------------------------------------
 -- Events
@@ -175,9 +127,13 @@ enchantEvents:RegisterEvent("PLAYER_LOGIN")
 enchantEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 enchantEvents:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 enchantEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
+enchantEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
 enchantEvents:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_REGEN_DISABLED" then
-        if alertFrame then alertFrame:Hide() end
+        enchantAlert:Hide()
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        -- Gear swapped mid-fight was not checked; do it now that combat is over.
+        if needsRecheck then ScheduleCheck() end
     else
         ScheduleCheck()
     end
@@ -199,30 +155,7 @@ function EnchantModule:BuildUI(parent, db)
     sectionTitle:SetText("Enchant Reminders")
     sectionTitle:SetTextColor(1, 0.82, 0)
 
-    local notifyLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    notifyLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -36)
-    notifyLabel:SetText("Notify via:")
-    notifyLabel:SetTextColor(0.7, 0.7, 0.7)
-
-    local cbChat = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbChat:SetSize(22, 22)
-    cbChat:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 60, -33)
-    cbChat:SetChecked(db.enchants.notify.chat)
-    cbChat:SetScript("OnClick", function(self) db.enchants.notify.chat = self:GetChecked() end)
-
-    local cbChatLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    cbChatLabel:SetPoint("LEFT", cbChat, "RIGHT", 2, 0)
-    cbChatLabel:SetText("Chat")
-
-    local cbScreen = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbScreen:SetSize(22, 22)
-    cbScreen:SetPoint("LEFT", cbChatLabel, "RIGHT", 16, 0)
-    cbScreen:SetChecked(db.enchants.notify.screen)
-    cbScreen:SetScript("OnClick", function(self) db.enchants.notify.screen = self:GetChecked() end)
-
-    local cbScreenLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    cbScreenLabel:SetPoint("LEFT", cbScreen, "RIGHT", 2, 0)
-    cbScreenLabel:SetText("On-screen")
+    local cbScreenLabel = AR.UI.NotifyRow(parent, COL_NAME_X, -36, db.enchants.notify)
 
     local cbGlobalIlvl = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbGlobalIlvl:SetSize(22, 22)
@@ -242,17 +175,14 @@ function EnchantModule:BuildUI(parent, db)
     globalIlvlInput:SetText(tostring(db.enchants.globalIlvl.value or 250))
 
     local function SaveGlobalIlvl(self)
-        db.enchants.globalIlvl.value = tonumber(self:GetText()) or 0
+        local v = tonumber(self:GetText()) or 0
+        db.enchants.globalIlvl.value = v
+        self:SetText(tostring(v))  -- an emptied box shows the value that is actually stored
     end
     globalIlvlInput:SetScript("OnEnterPressed", function(self) SaveGlobalIlvl(self) self:ClearFocus() end)
     globalIlvlInput:SetScript("OnEditFocusLost", SaveGlobalIlvl)
 
-    local notifyDiv = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    notifyDiv:SetHeight(1)
-    notifyDiv:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    notifyDiv:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    notifyDiv:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, -60)
-    notifyDiv:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, -60)
+    AR.UI.Divider(parent, -60)
 
     local HEADER_TOP = -68
 
@@ -271,12 +201,7 @@ function EnchantModule:BuildUI(parent, db)
     hIlvl:SetText("Min iLvl")
     hIlvl:SetTextColor(0.6, 0.6, 0.6)
 
-    local colDiv = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    colDiv:SetHeight(1)
-    colDiv:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    colDiv:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    colDiv:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, HEADER_TOP - 14)
-    colDiv:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, HEADER_TOP - 14)
+    AR.UI.Divider(parent, HEADER_TOP - 14)
 
     local SLOTS_TOP = HEADER_TOP - 20
     local slotEditBoxes = {}
@@ -308,7 +233,9 @@ function EnchantModule:BuildUI(parent, db)
         editBox:SetText(tostring(slotData.minIlvl or 0))
 
         local function SaveValue(self)
-            slotData.minIlvl = tonumber(self:GetText()) or 0
+            local v = tonumber(self:GetText()) or 0
+            slotData.minIlvl = v
+            self:SetText(tostring(v))
         end
         editBox:SetScript("OnEnterPressed", function(self) SaveValue(self) self:ClearFocus() end)
         editBox:SetScript("OnEditFocusLost", SaveValue)

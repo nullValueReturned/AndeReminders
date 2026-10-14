@@ -1,4 +1,4 @@
-## Interface: 120001, 120005, 120007
+## Interface: 120001, 120005, 120007, 120100, 120105
 ## Title: AndeReminders
 ## Notes: Modular reminder addon for enchants, repairs, and more
 ## Author:
@@ -15,6 +15,8 @@ Libs\LibDeflate\LibDeflate.lua
 Libs\LibSerialize\LibSerialize.lua
 
 AndeReminders.lua
+Core\Util.lua
+Core\UI.lua
 Modules\Enchants.lua
 Modules\Gear.lua
 Modules\Talents.lua

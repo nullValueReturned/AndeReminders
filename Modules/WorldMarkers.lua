@@ -1,4 +1,5 @@
-local AR = AndeReminders
+local AR   = AndeReminders
+local Util = AR.Util
 
 local WorldMarkersModule = {}
 
@@ -83,13 +84,22 @@ end
 -- Keybind storage
 -- ---------------------------------------------------------------------------
 
+local pendingBindingApply = false
+
 local function ApplyAllBindings(db)
+    if InCombatLockdown() then
+        -- e.g. /reload fired mid-combat; SetBinding is blocked, so retry once combat ends.
+        pendingBindingApply = true
+        return false
+    end
     for _, action in ipairs(ACTIONS) do
         local key = db.worldMarkers.keybinds[action.key]
         if key then
             SetBinding(key, action.bindingTarget)
         end
     end
+    pendingBindingApply = false
+    return true
 end
 
 local function ClearKeyFromOtherActions(db, newKey, exceptActionKey)
@@ -102,6 +112,10 @@ local function ClearKeyFromOtherActions(db, newKey, exceptActionKey)
 end
 
 local function SetActionKey(db, action, newKey)
+    if InCombatLockdown() then
+        Util.Print("Can't change World Marker keybinds while in combat.")
+        return false
+    end
     local oldKey = db.worldMarkers.keybinds[action.key]
     if oldKey then
         SetBinding(oldKey)
@@ -111,6 +125,7 @@ local function SetActionKey(db, action, newKey)
         SetBinding(newKey, action.bindingTarget)
     end
     db.worldMarkers.keybinds[action.key] = newKey
+    return true
 end
 
 -- ---------------------------------------------------------------------------
@@ -228,7 +243,7 @@ function WorldMarkersModule:BuildUI(parent, db)
         local wanted = self:GetChecked()
         if InCombatLockdown() then
             self:SetChecked(not wanted)
-            print("|cFFFF6600[AndeReminders]|r Can't change World Marker mode while in combat.")
+            Util.Print("Can't change World Marker mode while in combat.")
             return
         end
         db.worldMarkers.useCursor = wanted
@@ -237,16 +252,11 @@ function WorldMarkersModule:BuildUI(parent, db)
 
     local cursorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     cursorLabel:SetPoint("LEFT", cbCursor, "RIGHT", 6, 0)
-    cursorLabel:SetText("Place markers at cursor position instead of on target")
+    cursorLabel:SetText("Place markers at cursor position instead of at your feet")
 
     y = y - 30
 
-    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div:SetHeight(1)
-    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, y)
-    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, y)
+    AR.UI.Divider(parent, y)
 
     y = y - 16
 
@@ -306,12 +316,12 @@ local wmEvents = CreateFrame("Frame")
 wmEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
 wmEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 wmEvents:SetScript("OnEvent", function(_, event)
+    if not (AR.db and AR.db.worldMarkers) then return end
     if event == "PLAYER_ENTERING_WORLD" then
-        if AR.db and AR.db.worldMarkers then
-            ApplyAllBindings(AR.db)
-        end
-    elseif pendingModeApply and AR.db and AR.db.worldMarkers then
-        ApplyMarkerMode(AR.db.worldMarkers.useCursor)
+        ApplyAllBindings(AR.db)
+    else -- PLAYER_REGEN_ENABLED: finish whatever combat lockdown blocked
+        if pendingModeApply then ApplyMarkerMode(AR.db.worldMarkers.useCursor) end
+        if pendingBindingApply then ApplyAllBindings(AR.db) end
     end
 end)
 

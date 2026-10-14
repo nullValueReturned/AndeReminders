@@ -1,4 +1,6 @@
-local AR = AndeReminders
+local AR    = AndeReminders
+local Util  = AR.Util
+local Fonts = AR.Fonts
 local BossModModule = {}
 
 -- =============================================================================
@@ -7,24 +9,13 @@ local BossModModule = {}
 
 local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
 
-local BFONT_NAMES = { "Friz Quadrata TT", "Morpheus", "Skurri", "Arial Narrow" }
-local BFONT_PATHS = {
-    ["Friz Quadrata TT"] = "Fonts\\FRIZQT__.TTF",
-    ["Morpheus"]         = "Fonts\\MORPHEUS.ttf",
-    ["Skurri"]           = "Fonts\\skurri.ttf",
-    ["Arial Narrow"]     = "Fonts\\ARIALN.TTF",
-}
 local BTEX_NAMES = { "Blizzard", "Blizzard Raid" }
 local BTEX_PATHS = {
     ["Blizzard"]      = "Interface\\TargetingFrame\\UI-StatusBar",
     ["Blizzard Raid"] = "Interface\\RaidFrame\\Raid-Bar-Hp-Fill",
 }
 
-local function GetFontList() return LSM and LSM:List("font") or BFONT_NAMES end
-local function GetFontPath(n)
-    if LSM then return LSM:Fetch("font", n) or "Fonts\\FRIZQT__.TTF" end
-    return BFONT_PATHS[n] or "Fonts\\FRIZQT__.TTF"
-end
+local GetFontList = Fonts.List
 local function GetTexList() return LSM and LSM:List("statusbar") or BTEX_NAMES end
 local function GetTexPath(n)
     if LSM then return LSM:Fetch("statusbar", n) or "Interface\\TargetingFrame\\UI-StatusBar" end
@@ -32,6 +23,11 @@ local function GetTexPath(n)
 end
 local function GetSoundList() return LSM and LSM:List("sound") or {} end
 local function GetSoundPath(n) return LSM and LSM:Fetch("sound", n) end
+-- PlaySoundFile is an undocumented legacy function: guard it so that a future removal
+-- cannot break the whole entry.
+local function PlaySoundPath(path)
+    if path and PlaySoundFile then PlaySoundFile(path, "Master") end
+end
 
 local LCG = LibStub and LibStub("LibCustomGlow-1.0", true)
 
@@ -89,6 +85,7 @@ end
 -- =============================================================================
 
 local entryFrames = {}
+local ClearEntryRuntime  -- assigned below, once the runtime tables it clears exist
 
 local function NewEntry(etype, groupId)
     local db = AR.db.bossmods
@@ -119,10 +116,12 @@ local function DeleteEntry(id)
     if e.type == "group" then
         for _, cid in ipairs(e.children) do
             db.entries[cid] = nil
+            ClearEntryRuntime(cid)
             if entryFrames[cid] then entryFrames[cid]:Hide(); entryFrames[cid] = nil end
         end
     end
     db.entries[id] = nil
+    ClearEntryRuntime(id)
     if entryFrames[id] then entryFrames[id]:Hide(); entryFrames[id] = nil end
 end
 
@@ -235,6 +234,17 @@ local groupActiveKids   = {}  -- [groupId] = ordered list of visible child ids
 local condFired         = {}  -- [entryId] = { [condIdx] = true }  reset on ShowEntryFrame
 local condCleanup       = {}  -- [entryId] = list of cleanup fns    called on HideEntryFrame
 
+-- Forgets everything tracked for a deleted entry, so a pending timer (whose closure still
+-- holds the entry) cannot bring a deleted entry's frame back.
+ClearEntryRuntime = function(id)
+    if annTimers[id]  then annTimers[id]:Cancel();  annTimers[id]  = nil end
+    if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+    if condCleanup[id] then
+        for _, fn in ipairs(condCleanup[id]) do fn() end  -- stop glows / reset scale on the old frame
+    end
+    activeBars[id], condFired[id], condCleanup[id], groupActiveKids[id] = nil, nil, nil, nil
+end
+
 local function GetStage() return BigWigsLoader and bwStage or dbmStage end
 
 -- =============================================================================
@@ -266,9 +276,7 @@ local function PassesLoad(e)
         if tostring(diff) ~= e.loadDiff then return false end
     end
     if e.loadRole ~= "" then
-        local role = UnitGroupRolesAssigned("player")
-        if role == "NONE" then role = GetSpecializationRole(GetSpecialization()) end
-        if role ~= e.loadRole then return false end
+        if Util.GetRole() ~= e.loadRole then return false end
     end
     if e.loadZoneId ~= "" then
         local mapId = C_Map and C_Map.GetBestMapForUnit and C_Map.GetBestMapForUnit("player")
@@ -382,29 +390,57 @@ end
 -- BigWigs integration
 -- =============================================================================
 
+-- Hides every entry driven by a bar from the given source and forgets the bars.
+local function ClearTimers(source)
+    for id, bar in pairs(activeBars) do
+        if bar.source == source then
+            activeBars[id] = nil
+            if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
+            HideEntryFrame(id)
+        end
+    end
+end
+
 local BM_CB  = {}
 local bwReg  = false
 
 -- BigWigsLoader.RegisterMessage fires (event, arg1, arg2, ...) with no handler
 -- prepended — event name is the first arg, BigWigs payload follows directly.
 
--- WoW 12.1+ can hand back "secret" string values for spoiler-sensitive boss
--- text; reading them (:lower, :match, etc.) from addon code throws a taint
--- error ("attempt to index ... a secret string value"). Probe with a cheap
--- no-op string method inside pcall and fall back to "" for anything unreadable
--- so a secret value never reaches our matching/display code.
-local function SafeText(text)
-    if text == nil then return "" end
-    local ok, safe = pcall(function() return text:sub(1) end)
-    return ok and safe or ""
+-- WoW 12.x can hand back "secret" values for spoiler-sensitive boss text (and possibly
+-- other payload fields); reading them from addon code throws a taint error. Everything
+-- coming out of BigWigs / DBM is sanitized here, at the boundary, so a secret value never
+-- reaches the matching / display code below.
+local SafeText = Util.SafeString
+
+-- (Each helper tests for a secret first: a secret value may not even be compared with nil.)
+local function SafeId(v)     -- spell id as a string; "" when missing or secret
+    if Util.IsSecret(v) or v == nil then return "" end
+    return tostring(v)
+end
+
+local function SafeCount(v)  -- stack / cast count as a string; "0" when missing or secret
+    if Util.IsSecret(v) or v == nil then return "0" end
+    return tostring(v)
+end
+
+local function SafeStage(v)  -- boss stage; 0 when missing or secret
+    if Util.IsSecret(v) or v == nil then return 0 end
+    return v
+end
+
+local function SafeIcon(v)   -- texture id / path; nil when missing or secret
+    if Util.IsSecret(v) then return nil end
+    return v
 end
 
 local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
     local now = GetTime()
-    text = SafeText(text)
-    local d = { source="bw", spellId=tostring(spellId or ""), text=text,
-        duration=duration or 0, expirationTime=now+(duration or 0),
-        icon=icon, count=tostring(count or "0") }
+    text     = SafeText(text)
+    duration = Util.SafeNumber(duration) or 0
+    local d = { source="bw", spellId=SafeId(spellId), text=text,
+        duration=duration, expirationTime=now+duration,
+        icon=SafeIcon(icon), count=SafeCount(count) }
     bwBars[text] = d
     HandleTimerStart(d)
 end
@@ -412,22 +448,24 @@ end
 local function OnBWStopBar(_, _, text)
     -- event, addon, text
     text = SafeText(text)
+    if text == "" then return end  -- unreadable (secret) text cannot identify a bar
     bwBars[text] = nil; HandleTimerStop(text)
 end
 
 local function OnBWStopBars()
-    for t in pairs(bwBars) do bwBars[t] = nil; HandleTimerStop(t) end
+    wipe(bwBars)
+    ClearTimers("bw")
 end
 
 local function OnBWMessage(_, _, spellId, text, _, icon)
     -- event, addon, spellId, text, type, icon
     text = SafeText(text)
     local count = text:match("%((%d+)%)") or text:match("（(%d+)）") or "0"
-    HandleAnnounce({ source="bw", spellId=tostring(spellId or ""),
-        text=text, icon=icon, count=count })
+    HandleAnnounce({ source="bw", spellId=SafeId(spellId),
+        text=text, icon=SafeIcon(icon), count=count })
 end
 
-local function OnBWSetStage(_, _, stage) bwStage = stage or 0 end
+local function OnBWSetStage(_, _, stage) bwStage = SafeStage(stage) end
 local function OnBWWipe()               bwStage = 0 end
 
 local function RegisterBW()
@@ -438,7 +476,8 @@ local function RegisterBW()
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_TargetTimer",  OnBWTimer)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StartPull", function(ev, ad, dur, _, txt, ic)
         -- event, addon, duration, _, text, icon
-        OnBWTimer(ev, ad, -2, dur, nil, txt or "Pull", 0, ic or 136116)
+        local label = SafeText(txt)
+        OnBWTimer(ev, ad, -2, dur, nil, label ~= "" and label or "Pull", 0, SafeIcon(ic) or 136116)
     end)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBar",      OnBWStopBar)
     BigWigsLoader.RegisterMessage(BM_CB, "BigWigs_StopBars",     OnBWStopBars)
@@ -459,22 +498,25 @@ local function RegisterDBM()
     if dbmReg or not DBM then return end
     dbmReg = true
     DBM:RegisterCallback("DBM_Announce", function(_, msg, icon, _, spellId, _, _, count)
-        HandleAnnounce({ source="dbm", spellId=tostring(spellId or ""),
-            text=SafeText(msg), icon=icon, count=tostring(count or "0") })
+        HandleAnnounce({ source="dbm", spellId=SafeId(spellId),
+            text=SafeText(msg), icon=SafeIcon(icon), count=SafeCount(count) })
     end)
     DBM:RegisterCallback("DBM_TimerBegin", function(_, timerId, msg, dur, icon, _,
         spellId, _, _, _, _, _, _, count)
+        if Util.IsSecret(timerId) or timerId == nil then return end
         local now = GetTime()
-        local d = { source="dbm", spellId=tostring(spellId or ""), text=SafeText(msg),
-            timerId=timerId, duration=dur or 0, expirationTime=now+(dur or 0),
-            icon=icon, count=tostring(count or "0") }
+        dur = Util.SafeNumber(dur) or 0
+        local d = { source="dbm", spellId=SafeId(spellId), text=SafeText(msg),
+            timerId=timerId, duration=dur, expirationTime=now+dur,
+            icon=SafeIcon(icon), count=SafeCount(count) }
         dbmBars[timerId] = d; HandleTimerStart(d)
     end)
     DBM:RegisterCallback("DBM_TimerStop", function(_, timerId)
+        if Util.IsSecret(timerId) or timerId == nil then return end
         dbmBars[timerId] = nil; HandleTimerStop(timerId)
     end)
     local function DBMStage()
-        if DBM and DBM.GetStage then dbmStage = DBM:GetStage() or 0 end
+        if DBM and DBM.GetStage then dbmStage = SafeStage(DBM:GetStage()) end
     end
     DBM:RegisterCallback("DBM_SetStage", DBMStage)
     DBM:RegisterCallback("DBM_Pull",     DBMStage)
@@ -528,10 +570,15 @@ RegisterDBM()
 
 local function FmtDisplay(tmpl, rawText, count, rem)
     if not tmpl or tmpl == "" then return rawText end
+    -- Replacement functions insert their result literally. A plain replacement string would
+    -- treat any "%" in the boss text (e.g. "Phase 2 at 30%") as a gsub escape and mangle it.
+    local timeText  = ("%.1f"):format(math.max(0, rem or 0))
+    local countText = tostring(count or "")
+    local msgText   = tostring(rawText or "")
     local s = tmpl
-    s = s:gsub("%%t", ("%.1f"):format(math.max(0, rem or 0)))
-    s = s:gsub("%%c", tostring(count or ""))
-    s = s:gsub("%%m", tostring(rawText or ""))
+    s = s:gsub("%%t", function() return timeText end)
+    s = s:gsub("%%c", function() return countText end)
+    s = s:gsub("%%m", function() return msgText end)
     return s
 end
 
@@ -553,8 +600,13 @@ local function MakeIconFrame(id)
     f:SetScript("OnUpdate", function(self)
         if not self.expTime then return end
         local rem = math.max(0, self.expTime - GetTime())
-        if self.displayTmpl and self.displayTmpl:find("%%t") then
-            self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        if self.hasTimeToken then
+            -- Re-render only when the displayed (rounded) tenth of a second changes.
+            local tenths = math.floor(rem * 10 + 0.5)
+            if tenths ~= self.lastTenths then
+                self.lastTenths = tenths
+                self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+            end
         end
         local e = AR.db and AR.db.bossmods and AR.db.bossmods.entries[id]
         if e and e.conditions then
@@ -576,14 +628,15 @@ end
 local function LayoutIconFrame(f, e, data)
     local isz = e.iconSize or 32
     local fsz = e.fontSize or 14
-    local fp  = GetFontPath(e.fontName or GetFontList()[1])
-    f.label:SetFont(fp, fsz, "OUTLINE")
+    Fonts.Apply(f.label, e.fontName or GetFontList()[1], fsz, "OUTLINE")
     f.label:SetTextColor(e.tcR, e.tcG, e.tcB, e.tcA)
     local rawText = (data.text and data.text ~= "") and data.text or (e.name or "")
-    f.displayTmpl = e.displayText or ""
-    f.lastMsg     = rawText
-    f.lastCount   = data.count or ""
-    f.expTime     = data.expirationTime
+    f.displayTmpl  = e.displayText or ""
+    f.hasTimeToken = f.displayTmpl:find("%%t") ~= nil
+    f.lastTenths   = nil
+    f.lastMsg      = rawText
+    f.lastCount    = data.count or ""
+    f.expTime      = data.expirationTime
     local initRem = data.expirationTime and math.max(0, data.expirationTime - GetTime()) or 0
     f.label:SetText(FmtDisplay(f.displayTmpl, rawText, f.lastCount, initRem))
     f.icon:ClearAllPoints(); f.label:ClearAllPoints()
@@ -662,11 +715,16 @@ local function MakeBarFrame(id)
         end
         if rem <= 0 then self:Hide(); return end
         self.bar:SetValue(self.dur > 0 and rem/self.dur or 0)
-        if not self.hideTimer then
-            self.timeLabel:SetText(("%.1f"):format(rem))
-        end
-        if self.displayTmpl and self.displayTmpl ~= "" then
-            self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+        -- The texts only change once per displayed (rounded) tenth of a second.
+        local tenths = math.floor(rem * 10 + 0.5)
+        if tenths ~= self.lastTenths then
+            self.lastTenths = tenths
+            if not self.hideTimer then
+                self.timeLabel:SetText(("%.1f"):format(rem))
+            end
+            if self.hasTimeToken then
+                self.label:SetText(FmtDisplay(self.displayTmpl, self.lastMsg or "", self.lastCount or "", rem))
+            end
         end
     end)
     f:Hide(); return f
@@ -676,19 +734,20 @@ local function LayoutBarFrame(f, e, data)
     local bw  = e.barWidth   or 220
     local bh  = e.barHeight  or 22
     local fsz = e.barFontSize or 12
-    local fp  = GetFontPath(e.barFontName or GetFontList()[1])
     local tp  = GetTexPath(e.barTexName   or GetTexList()[1])
     f.bar:SetStatusBarTexture(tp)
     f.bar:SetStatusBarColor(e.bcR, e.bcG, e.bcB, e.bcA)
     for _, fs in ipairs({ f.label, f.timeLabel }) do
-        fs:SetFont(fp, fsz, "OUTLINE")
+        Fonts.Apply(fs, e.barFontName or GetFontList()[1], fsz, "OUTLINE")
         fs:SetTextColor(e.btcR, e.btcG, e.btcB, e.btcA)
     end
     local rawText = (data.text and data.text ~= "") and data.text or (e.name or "")
-    f.displayTmpl = e.displayText or ""
-    f.lastMsg     = rawText
-    f.lastCount   = data.count or ""
-    f.hideTimer   = e.barHideTimer or false
+    f.displayTmpl  = e.displayText or ""
+    f.hasTimeToken = f.displayTmpl:find("%%t") ~= nil
+    f.lastTenths   = nil
+    f.lastMsg      = rawText
+    f.lastCount    = data.count or ""
+    f.hideTimer    = e.barHideTimer or false
     f.timeLabel:SetShown(not f.hideTimer)
     f.expTime = data.expirationTime
     f.dur = (e.durationOverride ~= "" and tonumber(e.durationOverride))
@@ -817,7 +876,7 @@ FireConditionAction = function(entryId, cond)
             local key = "arcond" .. entryId
             local gt  = cond.glowType or "pixel"
             if     gt == "pixel"    then LCG.PixelGlow_Start(f, nil, nil, nil, nil, nil, 0, 0, false, key)
-            elseif gt == "proc"     then LCG.ProcGlow_Start(f, {}, key)
+            elseif gt == "proc"     then LCG.ProcGlow_Start(f, { key = key })
             elseif gt == "autocast" then LCG.AutoCastGlow_Start(f, nil, nil, nil, nil, 0, 0, key)
             end
             if not condCleanup[entryId] then condCleanup[entryId] = {} end
@@ -832,8 +891,7 @@ FireConditionAction = function(entryId, cond)
         end
 
     elseif action == "sound" then
-        local path = GetSoundPath(cond.soundName or "")
-        if path then PlaySoundFile(path, "Master") end
+        PlaySoundPath(GetSoundPath(cond.soundName or ""))
 
     elseif action == "scale" then
         f:SetScale(cond.scaleVal or 1.5)
@@ -950,107 +1008,17 @@ end
 -- Settings UI helpers
 -- =============================================================================
 
+-- Color swatch whose alpha is stored separately; only r/g/b are picked here.
 local function Swatch(parent, getR, getG, getB, getA, setColor)
-    local btn = CreateFrame("Button", nil, parent)
-    btn:SetSize(20, 20)
-    local border = btn:CreateTexture(nil, "BACKGROUND")
-    border:SetAllPoints(); border:SetColorTexture(0.5, 0.5, 0.5, 1)
-    local tex = btn:CreateTexture(nil, "ARTWORK")
-    tex:SetPoint("TOPLEFT", btn, "TOPLEFT", 1, -1)
-    tex:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -1, 1)
-    tex:SetColorTexture(getR(), getG(), getB(), 1)
-    btn.tex = tex
-    btn:SetScript("OnClick", function()
-        local sr, sg, sb, sa = getR(), getG(), getB(), getA()
-        ColorPickerFrame:SetupColorPickerAndShow({
-            r=sr, g=sg, b=sb, hasOpacity=false,
-            swatchFunc=function()
-                local nr, ng, nb = ColorPickerFrame:GetColorRGB()
-                setColor(nr, ng, nb, sa); tex:SetColorTexture(nr, ng, nb, 1)
-            end,
-            cancelFunc=function(prev)
-                setColor(prev.r, prev.g, prev.b, sa); tex:SetColorTexture(prev.r, prev.g, prev.b, 1)
-            end,
-        })
-    end)
-    btn.Refresh = function() tex:SetColorTexture(getR(), getG(), getB(), 1) end
-    return btn
+    return AR.UI.ColorSwatch(parent,
+        function() return getR(), getG(), getB() end,
+        function(r, g, b) setColor(r, g, b, getA()) end,
+        20)
 end
 
 -- Compact scrollable dropdown. opts = array of strings or {label,value} tables.
 local function ScrollDrop(parent, w, opts, getter, setter, kind)
-    -- Snapshot opts: LSM:List() returns its internal mutable array; if other addons
-    -- register fonts after this dropdown is built, opts would grow but selTex wouldn't.
-    local snap = {}; for i = 1, #opts do snap[i] = opts[i] end; opts = snap
-    local ITEM_H = 20; local MAX_H = 200; local SW = 14
-    local totalH = #opts * ITEM_H
-    local visH   = math.min(totalH, MAX_H)
-    local maxSc  = math.max(0, totalH - visH)
-    local hasSc  = maxSc > 0
-    local function Label(o) return type(o)=="table" and o.label or tostring(o) end
-    local function Val(o)   return type(o)=="table" and o.value or o end
-
-    local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    btn:SetSize(w, 22)
-    local bfs = btn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",btn,"LEFT",8,0); bfs:SetPoint("RIGHT",btn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
-    local arrowFs = btn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",btn,"RIGHT",-5,0); arrowFs:SetText("v")
-
-    local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    popup:SetSize(w, visH + 4)
-    popup:SetFrameLevel(parent:GetFrameLevel() + 50)
-    popup:SetBackdrop({ bgFile="Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1,
-        tile=true, tileSize=32, insets={left=2,right=2,top=2,bottom=2} })
-    popup:SetBackdropColor(0.08, 0.08, 0.08, 0.97)
-    popup:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-    popup:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, -2); popup:Hide()
-
-    local sf = CreateFrame("ScrollFrame", nil, popup)
-    sf:SetPoint("TOPLEFT", popup, "TOPLEFT", 2, -2)
-    sf:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", hasSc and -(SW+4) or -2, 2)
-    local ct = CreateFrame("Frame", nil, sf)
-    ct:SetWidth(w - (hasSc and (SW+6) or 4)); ct:SetHeight(math.max(totalH, 1))
-    sf:SetScrollChild(ct)
-
-    local selTex = {}
-    local function Refresh()
-        local cur = getter()
-        for i, o in ipairs(opts) do selTex[i]:SetShown(Val(o) == cur) end
-        for _, o in ipairs(opts) do
-            if Val(o) == cur then btn:SetText(Label(o)); return end
-        end
-        if opts[1] then btn:SetText(Label(opts[1])) end
-    end
-
-    for i, o in ipairs(opts) do
-        local row = CreateFrame("Button", nil, ct)
-        row:SetHeight(ITEM_H)
-        row:SetPoint("TOPLEFT",  ct, "TOPLEFT",  0, -(i-1)*ITEM_H)
-        row:SetPoint("TOPRIGHT", ct, "TOPRIGHT", 0, -(i-1)*ITEM_H)
-        if kind == "texture" then
-            local bg = row:CreateTexture(nil, "BACKGROUND"); bg:SetDrawLayer("BACKGROUND", -1); bg:SetAllPoints(); bg:SetTexture(GetTexPath(Val(o))); bg:SetVertexColor(0.55, 0.55, 0.55, 1)
-        end
-        local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1,1,1,0.1)
-        local st = row:CreateTexture(nil, "BACKGROUND"); st:SetAllPoints(); st:SetColorTexture(0.2,0.4,0.8,0.25); selTex[i] = st
-        local lbl = row:CreateFontString(nil,"OVERLAY","GameFontNormal"); lbl:SetPoint("LEFT",row,"LEFT",6,0); lbl:SetJustifyH("LEFT"); lbl:SetText(Label(o))
-        if kind == "font" then lbl:SetFont(GetFontPath(Val(o)), 12, "") end
-        local val = Val(o)
-        row:SetScript("OnClick", function() setter(val); popup:Hide(); Refresh() end)
-    end
-
-    if hasSc then
-        local sb = CreateFrame("Slider", nil, popup); sb:SetOrientation("VERTICAL"); sb:SetWidth(SW)
-        sb:SetPoint("TOPRIGHT",popup,"TOPRIGHT",-2,-18); sb:SetPoint("BOTTOMRIGHT",popup,"BOTTOMRIGHT",-2,18)
-        local th = sb:CreateTexture(nil,"OVERLAY"); th:SetTexture("Interface/Buttons/UI-ScrollBar-Knob"); th:SetSize(14,14); sb:SetThumbTexture(th)
-        sb:SetMinMaxValues(0, maxSc); sb:SetValue(0); sb:SetValueStep(ITEM_H); sb:SetObeyStepOnDrag(true)
-        sb:SetScript("OnValueChanged", function(s,v) sf:SetVerticalScroll(v) end)
-        sf:EnableMouseWheel(true)
-        sf:SetScript("OnMouseWheel", function(_,d) local mn,mx=sb:GetMinMaxValues(); sb:SetValue(math.max(mn,math.min(mx,sb:GetValue()-d*ITEM_H*3))) end)
-    end
-
-    btn:SetScript("OnClick", function() if popup:IsShown() then popup:Hide() else popup:Show() end end)
-    parent:HookScript("OnHide", function() popup:Hide() end)
-    Refresh(); btn.Refresh = Refresh; return btn
+    return AR.UI.Dropdown(parent, w, opts, getter, setter, { kind = kind, texturePath = GetTexPath })
 end
 
 local function MakeEB(parent, x, y, w, numeric)
@@ -1069,12 +1037,7 @@ local function Label(parent, x, y, text, template)
 end
 
 local function Divider(parent, y)
-    local d = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    d:SetHeight(1); d:SetBackdrop({bgFile="Interface/Buttons/WHITE8x8"})
-    d:SetBackdropColor(0.25, 0.25, 0.25, 1)
-    d:SetPoint("TOPLEFT",  parent, "TOPLEFT",  4, y)
-    d:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -4, y)
-    return d
+    return AR.UI.Divider(parent, y, 4, 0.25)
 end
 
 -- =============================================================================
@@ -1174,7 +1137,7 @@ local function BuildIconPicker()
             btn:SetPoint("TOPLEFT", gridFrame, "TOPLEFT", col * IC_CELL, -(row * IC_CELL - scrollOffset))
             btn.iconPath = filteredIcons[iconIdx]
             btn.tex:SetTexture(filteredIcons[iconIdx])
-            btn.selTex:SetShown(filteredIcons[iconIdx] == selectedPath)
+            btn.selTex:SetShown(tostring(filteredIcons[iconIdx]) == selectedPath)
             btn:Show()
         end
     end
@@ -1188,7 +1151,7 @@ local function BuildIconPicker()
                 for _, v in ipairs(allIconPaths) do filteredIcons[#filteredIcons+1] = v end
             else
                 for _, v in ipairs(allIconPaths) do
-                    if v:lower():find(query, 1, true) then filteredIcons[#filteredIcons+1] = v end
+                    if tostring(v):lower():find(query, 1, true) then filteredIcons[#filteredIcons+1] = v end
                 end
             end
         end
@@ -1211,14 +1174,14 @@ local function BuildIconPicker()
         pool[i]:SetScript("OnClick", function(self)
             if self.iconPath and iconPickerCb then
                 iconPickerCb(self.iconPath)
-                selectedPath = self.iconPath
+                selectedPath = tostring(self.iconPath)
                 UpdateGrid()
             end
         end)
         pool[i]:SetScript("OnEnter", function(self)
             if self.iconPath then
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-                local name = self.iconPath:match("[^\\/]+$") or self.iconPath
+                local name = tostring(self.iconPath):match("[^\\/]+$") or tostring(self.iconPath)
                 GameTooltip:SetText(name, 1, 1, 1, 1, true); GameTooltip:Show()
             end
         end)
@@ -1233,30 +1196,27 @@ local function BuildIconPicker()
     end)
 
     f.Reopen = function(currentPath)
-        selectedPath = currentPath
+        selectedPath = currentPath and tostring(currentPath) or nil
         if not allIconPaths then
             allIconPaths = {}
             local seen = {}
-            -- GetMacroIconInfo returns (path/fileID, isAtlas). Atlas icons need
-            -- SetAtlas, not SetTexture, so we skip them here.
-            local n = GetNumMacroIcons and GetNumMacroIcons() or 0
-            for i = 1, n do
-                local p, isAtlas = GetMacroIconInfo and GetMacroIconInfo(i)
-                if p and p ~= "" and not isAtlas then
-                    if not seen[p] then seen[p] = true; allIconPaths[#allIconPaths+1] = p end
-                end
-            end
-            -- Fallback: derive icons from spell textures if the macro API gave nothing
-            -- (happens when all macro icons are atlas-based in this client version).
-            if #allIconPaths == 0 then
-                for spellId = 1, 50000 do
-                    local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(spellId))
-                             or (GetSpellTexture and GetSpellTexture(spellId))
-                    if tex and not seen[tex] then
-                        seen[tex] = true; allIconPaths[#allIconPaths+1] = tex
+            -- The same sources Blizzard's IconDataProvider reads. Entries are file IDs or file
+            -- names relative to Interface\Icons; normalize them the way IconDataProvider does.
+            local function Collect(fill)
+                local list = {}
+                fill(list)
+                for _, entry in ipairs(list) do
+                    local icon = tonumber(entry) or ([[Interface\Icons\]] .. entry)
+                    if not seen[icon] then
+                        seen[icon] = true
+                        allIconPaths[#allIconPaths + 1] = icon
                     end
                 end
             end
+            Collect(GetLooseMacroIcons)
+            Collect(GetMacroIcons)
+            Collect(GetLooseMacroItemIcons)
+            Collect(GetMacroItemIcons)
         end
         searchEB:SetText(""); searchEB:SetFocus()
         RebuildFiltered("")
@@ -1667,8 +1627,8 @@ function BossModModule:BuildUI(parent, db)
         ovrChooseBtn:SetScript("OnClick", function()
             if not ref.e then return end
             ShowIconPicker(function(path)
-                ref.e.iconOverrideId = path
-                ovrEB:SetText(path)
+                ref.e.iconOverrideId = tostring(path)
+                ovrEB:SetText(tostring(path))
                 ovrTex:SetTexture(path); ovrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); ovrTex:SetAlpha(1)
                 RefreshPreview()
             end, ref.e.iconOverrideId)
@@ -1927,8 +1887,8 @@ function BossModModule:BuildUI(parent, db)
         barOvrChooseBtn:SetScript("OnClick", function()
             if not ref.e then return end
             ShowIconPicker(function(path)
-                ref.e.iconOverrideId = path
-                barOvrEB:SetText(path)
+                ref.e.iconOverrideId = tostring(path)
+                barOvrEB:SetText(tostring(path))
                 barOvrTex:SetTexture(path); barOvrTex:SetTexCoord(0.07, 0.93, 0.07, 0.93); barOvrTex:SetAlpha(1)
                 RefreshPreview()
             end, ref.e.iconOverrideId)
@@ -2208,8 +2168,7 @@ function BossModModule:BuildUI(parent, db)
             local function UpdateAnnSpellIcon(sid)
                 sid = tonumber(sid)
                 if not sid or sid == 0 then annSpellIcon:Hide(); return end
-                local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                         or (GetSpellTexture and GetSpellTexture(sid))
+                local tex = C_Spell.GetSpellTexture(sid)
                 if tex then annSITex:SetTexture(tex); annSpellIcon.spellId = sid; annSpellIcon:Show()
                 else annSpellIcon:Hide() end
             end
@@ -2272,8 +2231,7 @@ function BossModModule:BuildUI(parent, db)
             local function UpdateTmrSpellIcon(sid)
                 sid = tonumber(sid)
                 if not sid or sid == 0 then tmrSpellIcon:Hide(); return end
-                local tex = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                         or (GetSpellTexture and GetSpellTexture(sid))
+                local tex = C_Spell.GetSpellTexture(sid)
                 if tex then tmrSITex:SetTexture(tex); tmrSpellIcon.spellId = sid; tmrSpellIcon:Show()
                 else tmrSpellIcon:Hide() end
             end
@@ -2389,33 +2347,8 @@ function BossModModule:BuildUI(parent, db)
             function(v) if ref.e then ref.e.loadClass = v end end)
         clsDD:SetPoint("TOPLEFT", loadCont, "TOPLEFT", CX, y); y = y - RH
 
-        Label(loadCont, LX, y-3, "Encounter ID:")
-        local encEB = MakeEB(loadCont, CX, y, 100)
-        encEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadEncId = s:GetText() end; s:ClearFocus() end)
-        encEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadEncId = s:GetText() end end)
-        encEB:SetScript("OnEnter", function(self)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText("Midnight Season 1 Encounter IDs", 1, 0.82, 0)
-            GameTooltip:AddLine("|cffffd100The Voidspire|r")
-            GameTooltip:AddDoubleLine("  Imperator Averzian",   "3176", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Vorasius",              "3177", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Vaelgor & Ezzorak",     "3178", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Fallen-King Salhadaar", "3179", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Lightblinded Vanguard", "3180", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Crown of the Cosmos",   "3181", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100March on Quel'Danas|r")
-            GameTooltip:AddDoubleLine("  Belo'ren, Child of Al'ar", "3182", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddDoubleLine("  Midnight Falls",            "3183", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100Sporefall|r")
-            GameTooltip:AddDoubleLine("  Rotmire",   "3159", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:AddLine("|cffffd100The Dreamrift|r")
-            GameTooltip:AddDoubleLine("  Chimaerus", "3306", 0.8,0.8,0.8, 1,1,1)
-            GameTooltip:Show()
-        end)
-        encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        y = y - RH
-
-        -- Lazily built from the Encounter Journal on first hover; shared by both zone tooltips.
+        -- Lazily built from the Encounter Journal on first hover; shared by the encounter and
+        -- zone tooltips. Raids also carry their encounters (name + the ID ENCOUNTER_START reports).
         local zoneListCache = nil
         local function GetZoneList()
             if zoneListCache then return zoneListCache end
@@ -2433,8 +2366,20 @@ function BossModModule:BuildUI(parent, db)
                         EJ_SelectInstance(id)
                         local name, _, _, _, _, _, areaMapId = EJ_GetInstanceInfo(id)
                         if name and areaMapId and areaMapId ~= 0 then
-                            local groupId = C_Map and C_Map.GetMapGroupID and C_Map.GetMapGroupID(areaMapId)
-                            target[#target+1] = { name=name, zoneId=areaMapId, groupId=groupId }
+                            local groupId = C_Map.GetMapGroupID(areaMapId)
+                            local zone = { name=name, zoneId=areaMapId, groupId=groupId, encounters={} }
+                            if inRaid then
+                                local ei = 1
+                                while true do
+                                    local encName, _, journalEncounterID = EJ_GetEncounterInfoByIndex(ei)
+                                    if not encName then break end
+                                    -- ENCOUNTER_START reports the dungeon encounter id (7th return), not the journal id.
+                                    local _, _, _, _, _, _, dungeonEncounterID = EJ_GetEncounterInfo(journalEncounterID)
+                                    zone.encounters[#zone.encounters+1] = { name=encName, id=dungeonEncounterID or "?" }
+                                    ei = ei + 1
+                                end
+                            end
+                            target[#target+1] = zone
                         end
                         idx = idx + 1
                         id  = EJ_GetInstanceByIndex(idx, inRaid)
@@ -2445,6 +2390,30 @@ function BossModModule:BuildUI(parent, db)
             zoneListCache = { dungeons=dungeons, raids=raids }
             return zoneListCache
         end
+
+        Label(loadCont, LX, y-3, "Encounter ID:")
+        local encEB = MakeEB(loadCont, CX, y, 100)
+        encEB:SetScript("OnEnterPressed",  function(s) if ref.e then ref.e.loadEncId = s:GetText() end; s:ClearFocus() end)
+        encEB:SetScript("OnEditFocusLost", function(s) if ref.e then ref.e.loadEncId = s:GetText() end end)
+        encEB:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText("Encounter IDs  (current expansion raids)", 1, 0.82, 0)
+            local raids = GetZoneList().raids
+            if #raids == 0 then
+                GameTooltip:AddLine("|cff888888No raid data available from the Encounter Journal.|r", 0.5,0.5,0.5)
+            end
+            for _, raid in ipairs(raids) do
+                GameTooltip:AddLine("|cffffd100" .. raid.name .. "|r")
+                for _, enc in ipairs(raid.encounters) do
+                    GameTooltip:AddDoubleLine("  " .. enc.name, tostring(enc.id), 0.8,0.8,0.8, 1,1,1)
+                end
+            end
+            GameTooltip:Show()
+        end)
+        encEB:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        y = y - RH
+
+        -- (Zone / encounter lists are built from the Encounter Journal; see GetZoneList above.)
 
         Label(loadCont, LX, y-3, "Zone ID:")
         local zoneIdEB = MakeEB(loadCont, CX, y, 100)
@@ -2466,7 +2435,7 @@ function BossModModule:BuildUI(parent, db)
             local zl = GetZoneList()
             for pass = 1, 2 do
                 local list   = pass == 1 and zl.raids    or zl.dungeons
-                local header = pass == 1 and "Season 1 Raids" or "Season 1 Dungeons"
+                local header = pass == 1 and "Raids (current expansion)" or "Dungeons (current expansion)"
                 if #list > 0 then
                     GameTooltip:AddLine("|cffffd100" .. header .. "|r")
                     for _, entry in ipairs(list) do
@@ -2610,7 +2579,7 @@ function BossModModule:BuildUI(parent, db)
             if #soundList > 0 then
                 soundDD = ScrollDrop(row, 180, soundList,
                     function() return cond.soundName or soundList[1] end,
-                    function(v) cond.soundName = v; local p = GetSoundPath(v); if p then PlaySoundFile(p, "Master") end end)
+                    function(v) cond.soundName = v; PlaySoundPath(GetSoundPath(v)) end)
                 soundDD:SetPoint("TOPLEFT", row, "TOPLEFT", 188, -32)
             else
                 local noSndLbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -2902,8 +2871,7 @@ function BossModModule:BuildUI(parent, db)
         if spellId and spellId ~= "" then
             local sid = tonumber(spellId)
             if sid then
-                local t = (C_Spell and C_Spell.GetSpellTexture and C_Spell.GetSpellTexture(sid))
-                       or (GetSpellTexture and GetSpellTexture(sid))
+                local t = C_Spell.GetSpellTexture(sid)
                 if t then return t end
             end
         end

@@ -1,4 +1,5 @@
-local AR = AndeReminders
+local AR   = AndeReminders
+local Util = AR.Util
 
 -- ---------------------------------------------------------------------------
 -- Spec data: primary stat + weapon-type requirements per specialization ID.
@@ -59,17 +60,6 @@ local SPEC_DATA = {
     [267] = { name = "Destruction Warlock",    stat = "INT" },
 }
 
-local IS_2H = {
-    [1]  = true,  -- Axe (2H)
-    [5]  = true,  -- Mace (2H)
-    [6]  = true,  -- Polearm
-    [8]  = true,  -- Sword (2H)
-    [10] = true,  -- Staff
-    [2]  = true,  -- Bow
-    [3]  = true,  -- Gun
-    [18] = true,  -- Crossbow
-}
-
 local SLOT_NAMES = {
     [1]  = "Head",     [2]  = "Neck",      [3]  = "Shoulder",
     [5]  = "Chest",    [6]  = "Waist",     [7]  = "Legs",
@@ -78,33 +68,21 @@ local SLOT_NAMES = {
     [14] = "Trinket 2",[15] = "Back",      [16] = "Main Hand",
     [17] = "Off Hand",
 }
+-- Report order for per-slot results (pairs() over SLOT_NAMES is unordered).
+local SLOT_ORDER = { 1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 }
+
+local MAIN_HAND, OFF_HAND, BACK = 16, 17, 15
+local DEFAULT_DURABILITY_PERCENT = 50
+local ENGINEERING_SKILL_LINE = 202
+local GOBLIN_GLIDER_RECIPE   = 126392
 
 local GearModule = {}
-local checkTimer = nil
-local alertFrame = nil
 local durabilityWarnFrame = nil
-local scanTooltip = nil
+local needsRecheck = false  -- a scheduled check was skipped because the player was in combat
 
-local function GetScanTooltip()
-    if scanTooltip then return scanTooltip end
-    scanTooltip = CreateFrame("GameTooltip", "AndeRemindersScanTooltip", nil, "GameTooltipTemplate")
-    scanTooltip:SetOwner(WorldFrame, "ANCHOR_NONE")
-    return scanTooltip
-end
-
-local function CloakHasOnUse(link)
-    local tip = GetScanTooltip()
-    tip:ClearLines()
-    tip:SetHyperlink(link)
-    for i = 1, tip:NumLines() do
-        local lineLeft = _G["AndeRemindersScanTooltipTextLeft" .. i]
-        if lineLeft then
-            local text = lineLeft:GetText()
-            if text and text:find("Use:") then return true end
-        end
-    end
-    return false
-end
+local gearAlert = AR.UI.CreateAlert({
+    name = "AndeRemindersGearAlert", anchor = "gear", width = 380, fallbackY = -300,
+})
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -122,59 +100,11 @@ function GearModule:InitDB(db)
     if db.gear.checks.lowDurability == nil then db.gear.checks.lowDurability = true end
     if db.gear.checks.cloakGlider  == nil then db.gear.checks.cloakGlider   = true end
     if db.gear.lowIlvlThreshold    == nil then db.gear.lowIlvlThreshold     = 50   end
-end
-
--- ---------------------------------------------------------------------------
--- Gear alert frame (weapon / stat / ilvl issues)
--- ---------------------------------------------------------------------------
-
-local function GetAlertFrame()
-    if alertFrame then return alertFrame end
-
-    alertFrame = CreateFrame("Frame", "AndeRemindersGearAlert", UIParent, "BackdropTemplate")
-    alertFrame:SetSize(380, 80)
-
-    local anchor = AR.anchorFrames and AR.anchorFrames["gear"]
-    if anchor then
-        alertFrame:SetPoint("CENTER", anchor, "CENTER", 0, 0)
-    else
-        alertFrame:SetPoint("TOP", UIParent, "TOP", 0, -300)
-    end
-
-    alertFrame:EnableMouse(true)
-    alertFrame:SetFrameStrata("MEDIUM")
-    alertFrame:SetBackdrop({
-        bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
-        tile = true, tileSize = 32,
-        insets = { left = 4, right = 4, top = 4, bottom = 4 },
-    })
-    alertFrame:Hide()
-
-    local header = alertFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    header:SetPoint("TOPLEFT", alertFrame, "TOPLEFT", 10, -10)
-    header:SetText("|cFFFF6600AR|r")
-    alertFrame.header = header
-
-    local body = alertFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    body:SetPoint("TOPLEFT",  alertFrame, "TOPLEFT",  10, -26)
-    body:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", -10, -26)
-    body:SetJustifyH("LEFT")
-    body:SetWordWrap(true)
-    alertFrame.body = body
-
-    local closeBtn = CreateFrame("Button", nil, alertFrame, "UIPanelCloseButton")
-    closeBtn:SetSize(20, 20)
-    closeBtn:SetPoint("TOPRIGHT", alertFrame, "TOPRIGHT", 2, 2)
-    closeBtn:SetScript("OnClick", function() alertFrame:Hide() end)
-
-    return alertFrame
+    if db.gear.durabilityThreshold == nil then db.gear.durabilityThreshold = DEFAULT_DURABILITY_PERCENT end
 end
 
 function GearModule:ShowAlert(text)
-    local af = GetAlertFrame()
-    af.body:SetText(text)
-    af:SetHeight(af.body:GetHeight() + 44)
-    af:Show()
+    gearAlert:Show(text)
 end
 
 -- ---------------------------------------------------------------------------
@@ -183,32 +113,23 @@ end
 
 function GearModule:CheckWeaponType(specData)
     local issues = {}
-    local mhLink = GetInventoryItemLink("player", 16)
-    local ohLink = GetInventoryItemLink("player", 17)
+    local mhLink = GetInventoryItemLink("player", MAIN_HAND)
+    local ohLink = GetInventoryItemLink("player", OFF_HAND)
+    local ohIsShield = ohLink ~= nil and Util.IsShield((Util.GetItemType(ohLink)))
 
     if specData.require2H and mhLink then
-        local _, _, _, _, _, _, _, _, _, _, _, classId, subClassId = GetItemInfo(mhLink)
-        if classId == 2 and not IS_2H[subClassId] then
+        local equipLoc, classID = Util.GetItemType(mhLink)
+        if classID == 2 and not Util.IsTwoHanded(equipLoc) then
             table.insert(issues, specData.name .. ": main hand should be a 2-handed weapon")
         end
     end
 
-    if specData.requireShield then
-        local hasShield = false
-        if ohLink then
-            local _, _, _, _, _, _, _, _, _, _, _, classId, subClassId = GetItemInfo(ohLink)
-            hasShield = (classId == 4 and subClassId == 6)
-        end
-        if not hasShield then
-            table.insert(issues, specData.name .. ": off-hand should be a shield")
-        end
+    if specData.requireShield and not ohIsShield then
+        table.insert(issues, specData.name .. ": off-hand should be a shield")
     end
 
-    if specData.forbidShield and ohLink then
-        local _, _, _, _, _, _, _, _, _, _, _, classId, subClassId = GetItemInfo(ohLink)
-        if classId == 4 and subClassId == 6 then
-            table.insert(issues, specData.name .. ": shield equipped (wrong for this spec)")
-        end
+    if specData.forbidShield and ohIsShield then
+        table.insert(issues, specData.name .. ": shield equipped (wrong for this spec)")
     end
 
     return issues
@@ -216,11 +137,11 @@ end
 
 function GearModule:CheckWeaponStat(specData)
     local issues = {}
-    local mhLink = GetInventoryItemLink("player", 16)
+    local mhLink = GetInventoryItemLink("player", MAIN_HAND)
     if not mhLink then return issues end
 
-    local _, _, _, _, _, _, _, _, _, _, _, classId = GetItemInfo(mhLink)
-    if classId ~= 2 then return issues end
+    local _, classID = Util.GetItemType(mhLink)
+    if classID ~= 2 then return issues end
 
     local stats = C_Item.GetItemStats(mhLink)
     if not stats then return issues end
@@ -245,31 +166,45 @@ end
 
 function GearModule:CheckLowItemLevel(threshold)
     local issues = {}
-    for slot, slotName in pairs(SLOT_NAMES) do
-        local link = GetInventoryItemLink("player", slot)
-        if link then
-            local name, _, _, ilvl = GetItemInfo(link)
-            if name and ilvl and ilvl > 0 and ilvl < threshold then
-                table.insert(issues, slotName .. ": item level " .. ilvl .. " (below " .. threshold .. ")")
-            end
+    for _, slot in ipairs(SLOT_ORDER) do
+        local ilvl = Util.GetEquippedItemLevel(slot)
+        if ilvl and ilvl > 0 and ilvl < threshold then
+            table.insert(issues, SLOT_NAMES[slot] .. ": item level " .. ilvl .. " (below " .. threshold .. ")")
         end
     end
     return issues
 end
 
+local function IsEngineeringSkillLine(professionIndex)
+    if not professionIndex then return false end
+    local _, _, _, _, _, _, skillLine = GetProfessionInfo(professionIndex)
+    return skillLine == ENGINEERING_SKILL_LINE
+end
+
+-- true / false when the cloak's tooltip is readable, nil when it is not.
+local function CloakHasOnUse()
+    local data = C_TooltipInfo.GetInventoryItem("player", BACK)
+    if not data or not data.lines then return nil end
+    local onUseLine = Enum.TooltipDataLineType.ItemSpellTriggerOnUse
+    for _, line in ipairs(data.lines) do
+        -- Line types are language independent; the localized "Use:" prefix is a fallback for
+        -- lines the client does not type as an on-use trigger.
+        if line.type == onUseLine then return true end
+        local text = Util.SafeString(line.leftText)
+        if ITEM_SPELL_TRIGGER_ONUSE and text ~= "" and text:find(ITEM_SPELL_TRIGGER_ONUSE, 1, true) then
+            return true
+        end
+    end
+    return false
+end
+
 function GearModule:CheckCloakGlider()
     local p1, p2 = GetProfessions()
-    local function hasEngSkill(idx)
-        if not idx then return false end
-        local _, _, _, _, _, _, skillLine = GetProfessionInfo(idx)
-        return skillLine == 202
-    end
-    if not (hasEngSkill(p1) or hasEngSkill(p2)) then return nil end
-    local recipeInfo = C_TradeSkillUI.GetRecipeInfo(126392)
+    if not (IsEngineeringSkillLine(p1) or IsEngineeringSkillLine(p2)) then return nil end
+    local recipeInfo = C_TradeSkillUI.GetRecipeInfo(GOBLIN_GLIDER_RECIPE)
     if not (recipeInfo and recipeInfo.learned) then return nil end
-    local link = GetInventoryItemLink("player", 15)
-    if not link then return nil end
-    if not CloakHasOnUse(link) then
+    if not GetInventoryItemLink("player", BACK) then return nil end
+    if CloakHasOnUse() == false then
         return "Missing cloak glider enchant"
     end
     return nil
@@ -296,7 +231,7 @@ local function GetDurabilityWarnFrame()
     durabilityWarnFrame:Hide()
 
     local label = durabilityWarnFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    label:SetFont(label:GetFont(), 48)
+    label:SetFont(STANDARD_TEXT_FONT, 48, "")
     label:SetPoint("CENTER", durabilityWarnFrame, "CENTER", 0, 0)
     label:SetText("|cFFFF6600[AR]|r Low Durability \226\128\148 Repair your gear!")
     durabilityWarnFrame.label = label
@@ -305,9 +240,10 @@ local function GetDurabilityWarnFrame()
 end
 
 function GearModule:CheckLowDurability()
+    local threshold = ((AR.db and AR.db.gear.durabilityThreshold) or DEFAULT_DURABILITY_PERCENT) / 100
     for slot in pairs(SLOT_NAMES) do
         local current, max = GetInventoryItemDurability(slot)
-        if current and max and max > 0 and current / max < 0.5 then
+        if current and max and max > 0 and current / max < threshold then
             return true
         end
     end
@@ -316,8 +252,13 @@ end
 
 function GearModule:RunDurabilityCheck()
     if not AR.db or not AR.db.gear then return end
-    if not AR.db.gear.checks.lowDurability then return end
     if InCombatLockdown() then return end
+
+    if not AR.db.gear.checks.lowDurability then
+        -- The option was unticked while the banner was up: take it down.
+        if durabilityWarnFrame then durabilityWarnFrame:Hide() end
+        return
+    end
 
     local wf = GetDurabilityWarnFrame()
     if self:CheckLowDurability() then
@@ -328,14 +269,17 @@ function GearModule:RunDurabilityCheck()
 end
 
 function GearModule:RunCheck()
-    if UnitLevel("player") < 90 then return end
+    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
     if not AR.db or not AR.db.gear then return end
-    if InCombatLockdown() then return end
+    if InCombatLockdown() then
+        needsRecheck = true
+        return
+    end
+    needsRecheck = false
     local db = AR.db
 
-    local specIndex = GetSpecialization()
-    if not specIndex then return end
-    local specId = select(1, GetSpecializationInfo(specIndex))
+    local _, specId = Util.GetSpec()
+    if not specId then return end
     local specData = SPEC_DATA[specId]
 
     local issues = {}
@@ -360,14 +304,14 @@ function GearModule:RunCheck()
     end
 
     if #issues == 0 then
-        if alertFrame and alertFrame:IsShown() then alertFrame:Hide() end
+        gearAlert:Hide()
         return
     end
 
     local notify = db.gear.notify
     if notify.chat then
         for _, issue in ipairs(issues) do
-            print("|cFFFF6600[AndeReminders]|r " .. issue)
+            Util.Print(issue)
         end
     end
     if notify.screen then
@@ -375,13 +319,10 @@ function GearModule:RunCheck()
     end
 end
 
-local function ScheduleCheck()
-    if checkTimer then checkTimer:Cancel() end
-    checkTimer = C_Timer.NewTimer(2, function()
-        checkTimer = nil
-        GearModule:RunCheck()
-    end)
-end
+local ScheduleCheck = Util.Debounce(2, function()
+    GearModule:RunCheck()
+    GearModule:RunDurabilityCheck()
+end)
 
 -- ---------------------------------------------------------------------------
 -- Events
@@ -391,26 +332,23 @@ local gearEvents = CreateFrame("Frame")
 gearEvents:RegisterEvent("PLAYER_LOGIN")
 gearEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 gearEvents:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
-gearEvents:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+gearEvents:RegisterUnitEvent("PLAYER_SPECIALIZATION_CHANGED", "player")  -- also fires when inspecting others
 gearEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
+gearEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+gearEvents:RegisterEvent("PLAYER_DEAD")
+gearEvents:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
 gearEvents:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_REGEN_DISABLED" then
-        if alertFrame then alertFrame:Hide() end
+        gearAlert:Hide()
+        if durabilityWarnFrame then durabilityWarnFrame:Hide() end
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        GearModule:RunDurabilityCheck()
+        -- Gear swapped mid-fight was not checked; do it now that combat is over.
+        if needsRecheck then ScheduleCheck() end
+    elseif event == "PLAYER_DEAD" or event == "UPDATE_INVENTORY_DURABILITY" then
+        GearModule:RunDurabilityCheck()
     else
         ScheduleCheck()
-    end
-end)
-
-local durabilityEvents = CreateFrame("Frame")
-durabilityEvents:RegisterEvent("PLAYER_DEAD")
-durabilityEvents:RegisterEvent("UPDATE_INVENTORY_DURABILITY")
-durabilityEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
-durabilityEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
-durabilityEvents:SetScript("OnEvent", function(self, event)
-    if event == "PLAYER_REGEN_DISABLED" then
-        if durabilityWarnFrame then durabilityWarnFrame:Hide() end
-    else
-        GearModule:RunDurabilityCheck()
     end
 end)
 
@@ -422,76 +360,38 @@ function GearModule:BuildUI(parent, db)
     local X       = 12
     local ROW_H   = 28
     local CHECK_X = 12
-    local LABEL_X = 40
 
     local title = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOPLEFT", parent, "TOPLEFT", X, -10)
     title:SetText("Gear Reminders")
     title:SetTextColor(1, 0.82, 0)
 
-    local notifyLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    notifyLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", X, -36)
-    notifyLabel:SetText("Notify via:")
-    notifyLabel:SetTextColor(0.7, 0.7, 0.7)
-
-    local cbChat = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbChat:SetSize(22, 22)
-    cbChat:SetPoint("TOPLEFT", parent, "TOPLEFT", X + 60, -33)
-    cbChat:SetChecked(db.gear.notify.chat)
-    cbChat:SetScript("OnClick", function(self) db.gear.notify.chat = self:GetChecked() end)
-
-    local cbChatLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    cbChatLabel:SetPoint("LEFT", cbChat, "RIGHT", 2, 0)
-    cbChatLabel:SetText("Chat")
-
-    local cbScreen = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbScreen:SetSize(22, 22)
-    cbScreen:SetPoint("LEFT", cbChatLabel, "RIGHT", 16, 0)
-    cbScreen:SetChecked(db.gear.notify.screen)
-    cbScreen:SetScript("OnClick", function(self) db.gear.notify.screen = self:GetChecked() end)
-
-    local cbScreenLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    cbScreenLabel:SetPoint("LEFT", cbScreen, "RIGHT", 2, 0)
-    cbScreenLabel:SetText("On-screen")
-
-    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div:SetHeight(1)
-    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, -60)
-    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, -60)
+    AR.UI.NotifyRow(parent, X, -36, db.gear.notify)
+    AR.UI.Divider(parent, -60)
 
     local ROWS_TOP = -70
 
-    local cbWT = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbWT:SetSize(22, 22)
-    cbWT:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP)
-    cbWT:SetChecked(db.gear.checks.weaponType)
-    cbWT:SetScript("OnClick", function(self) db.gear.checks.weaponType = self:GetChecked() end)
+    -- Checkbox + label bound to db.gear.checks[key] (onChange runs after a click);
+    -- returns the label for chaining.
+    local function AddCheck(y, key, text, onChange)
+        local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cb:SetSize(22, 22)
+        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, y)
+        cb:SetChecked(db.gear.checks[key])
+        cb:SetScript("OnClick", function(self)
+            db.gear.checks[key] = self:GetChecked()
+            if onChange then onChange() end
+        end)
 
-    local lWT = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lWT:SetPoint("LEFT", cbWT, "RIGHT", 6, 0)
-    lWT:SetText("Wrong weapon type for spec (2H / 1H / shield)")
+        local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("LEFT", cb, "RIGHT", 6, 0)
+        label:SetText(text)
+        return label
+    end
 
-    local cbWS = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbWS:SetSize(22, 22)
-    cbWS:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H)
-    cbWS:SetChecked(db.gear.checks.weaponStat)
-    cbWS:SetScript("OnClick", function(self) db.gear.checks.weaponStat = self:GetChecked() end)
-
-    local lWS = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lWS:SetPoint("LEFT", cbWS, "RIGHT", 6, 0)
-    lWS:SetText("Wrong main stat on weapon (STR / AGI / INT)")
-
-    local cbIL = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbIL:SetSize(22, 22)
-    cbIL:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 2)
-    cbIL:SetChecked(db.gear.checks.lowIlvl)
-    cbIL:SetScript("OnClick", function(self) db.gear.checks.lowIlvl = self:GetChecked() end)
-
-    local lIL = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lIL:SetPoint("LEFT", cbIL, "RIGHT", 6, 0)
-    lIL:SetText("Item level below")
+    AddCheck(ROWS_TOP,             "weaponType", "Wrong weapon type for spec (2H / 1H / shield)")
+    AddCheck(ROWS_TOP - ROW_H,     "weaponStat", "Wrong main stat on weapon (STR / AGI / INT)")
+    local lIL = AddCheck(ROWS_TOP - ROW_H * 2, "lowIlvl", "Item level below")
 
     local ilvlBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
     ilvlBox:SetSize(52, 20)
@@ -502,7 +402,9 @@ function GearModule:BuildUI(parent, db)
     ilvlBox:SetText(tostring(db.gear.lowIlvlThreshold or 50))
 
     local function SaveThreshold(self)
-        db.gear.lowIlvlThreshold = tonumber(self:GetText()) or 50
+        local v = tonumber(self:GetText()) or 50
+        db.gear.lowIlvlThreshold = v
+        self:SetText(tostring(v))  -- an emptied box shows the value that is actually stored
     end
     ilvlBox:SetScript("OnEnterPressed", function(self) SaveThreshold(self) self:ClearFocus() end)
     ilvlBox:SetScript("OnEditFocusLost", SaveThreshold)
@@ -520,32 +422,35 @@ function GearModule:BuildUI(parent, db)
     note:SetWordWrap(true)
     note:SetJustifyH("LEFT")
 
-    local div2 = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div2:SetHeight(1)
-    div2:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div2:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div2:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, ROWS_TOP - ROW_H * 3 - 54)
-    div2:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, ROWS_TOP - ROW_H * 3 - 54)
+    AR.UI.Divider(parent, ROWS_TOP - ROW_H * 3 - 54)
 
-    local cbDur = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbDur:SetSize(22, 22)
-    cbDur:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 3 - 68)
-    cbDur:SetChecked(db.gear.checks.lowDurability)
-    cbDur:SetScript("OnClick", function(self) db.gear.checks.lowDurability = self:GetChecked() end)
+    local lDur = AddCheck(ROWS_TOP - ROW_H * 3 - 68, "lowDurability", "Low durability warning below",
+        function() GearModule:RunDurabilityCheck() end)
 
-    local lDur = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lDur:SetPoint("LEFT", cbDur, "RIGHT", 6, 0)
-    lDur:SetText("Low durability warning (<50%, persists until repaired)")
+    local durBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+    durBox:SetSize(40, 20)
+    durBox:SetPoint("LEFT", lDur, "RIGHT", 8, 0)
+    durBox:SetAutoFocus(false)
+    durBox:SetNumeric(true)
+    durBox:SetMaxLetters(3)
+    durBox:SetText(tostring(db.gear.durabilityThreshold or DEFAULT_DURABILITY_PERCENT))
 
-    local cbCG = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbCG:SetSize(22, 22)
-    cbCG:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, ROWS_TOP - ROW_H * 4 - 68)
-    cbCG:SetChecked(db.gear.checks.cloakGlider)
-    cbCG:SetScript("OnClick", function(self) db.gear.checks.cloakGlider = self:GetChecked() end)
+    local function SaveDurability(self)
+        local v = tonumber(self:GetText()) or DEFAULT_DURABILITY_PERCENT
+        if v < 1 then v = 1 elseif v > 99 then v = 99 end
+        db.gear.durabilityThreshold = v
+        self:SetText(tostring(v))
+        GearModule:RunDurabilityCheck()
+    end
+    durBox:SetScript("OnEnterPressed", function(self) SaveDurability(self) self:ClearFocus() end)
+    durBox:SetScript("OnEditFocusLost", SaveDurability)
 
-    local lCG = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lCG:SetPoint("LEFT", cbCG, "RIGHT", 6, 0)
-    lCG:SetText("Missing Goblin Glider cloak tinker (Engineering)")
+    local lDurUnit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    lDurUnit:SetPoint("LEFT", durBox, "RIGHT", 4, 0)
+    lDurUnit:SetText("%  (persists until repaired)")
+    lDurUnit:SetTextColor(0.65, 0.65, 0.65)
+
+    AddCheck(ROWS_TOP - ROW_H * 4 - 68, "cloakGlider",   "Missing Goblin Glider cloak tinker (Engineering)")
 end
 
 AR:RegisterModule("Gear", GearModule)

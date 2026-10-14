@@ -13,6 +13,12 @@ local ANCHOR_DEFS = {
     { name = "repair",    label = "Repair Warning", x = 0, y = -90, w = 500, h = 70 },
 }
 
+-- Runs fn through the game's error handler so one broken module cannot take the rest of
+-- the addon down with it.
+local function Guarded(fn)
+    return xpcall(fn, geterrorhandler())
+end
+
 function AR:RegisterModule(name, module)
     table.insert(self.registeredModules, { name = name, module = module })
 end
@@ -28,7 +34,7 @@ function AR:InitDB()
     end
     for _, entry in ipairs(AR.registeredModules) do
         if entry.module.InitDB then
-            entry.module:InitDB(AR.db)
+            Guarded(function() entry.module:InitDB(AR.db) end)
         end
     end
 end
@@ -101,6 +107,18 @@ function AR:CreateAnchors()
     end
 end
 
+-- Puts every anchor back at its default position (e.g. one was dragged off-screen).
+function AR:ResetAnchors()
+    for _, def in ipairs(ANCHOR_DEFS) do
+        AR.db.anchors[def.name] = { x = def.x, y = def.y }
+        local f = AR.anchorFrames[def.name]
+        if f then
+            f:ClearAllPoints()
+            f:SetPoint("CENTER", UIParent, "CENTER", def.x, def.y)
+        end
+    end
+end
+
 -- ---------------------------------------------------------------------------
 -- Settings window
 -- ---------------------------------------------------------------------------
@@ -132,6 +150,7 @@ function AR:CreateSettingsWindow()
     f:SetSize(960, 580)
     f:SetPoint("CENTER")
     f:SetMovable(true)
+    f:SetClampedToScreen(true)
     f:EnableMouse(true)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
@@ -142,6 +161,7 @@ function AR:CreateSettingsWindow()
         tile = true, tileSize = 32,
     })
     f:Hide()
+    tinsert(UISpecialFrames, "AndeRemindersSettings")  -- Escape closes the window
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", f, "TOP", 0, -14)
@@ -161,7 +181,7 @@ function AR:CreateSettingsWindow()
     local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     btn:SetSize(150, 24)
     btn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 12)
-    btn:SetText("Toggle Anchors")
+    btn:SetText(AR.anchorsShown and "Hide Anchors" or "Toggle Anchors")
     btn:SetScript("OnClick", function() AR:ToggleAnchors() end)
     toggleAnchorsBtn = btn
 
@@ -204,7 +224,7 @@ function AR:CreateSettingsWindow()
         entry.contentFrame = content
 
         if entry.module.BuildUI then
-            entry.module:BuildUI(content, AR.db)
+            Guarded(function() entry.module:BuildUI(content, AR.db) end)
         end
 
         local tabIndex = i
@@ -256,12 +276,25 @@ eventFrame:SetScript("OnEvent", function(self, event, addonName)
     end
 end)
 
+local function PrintHelp()
+    AR.Util.Print("commands:")
+    print("  /ar            toggle the settings window")
+    print("  /ar anchors    show / hide the draggable anchor frames")
+    print("  /ar reset      put every anchor back at its default position")
+end
+
 SLASH_ANDEREMINDERS1 = "/ar"
 SLASH_ANDEREMINDERS2 = "/andereminders"
 SlashCmdList["ANDEREMINDERS"] = function(msg)
-    if msg == "anchors" then
-        AR:ToggleAnchors()
-    else
+    local cmd = (msg or ""):match("^%s*(.-)%s*$"):lower()
+    if cmd == "" then
         AR:ToggleSettings()
+    elseif cmd == "anchors" then
+        AR:ToggleAnchors()
+    elseif cmd == "reset" then
+        AR:ResetAnchors()
+        AR.Util.Print("anchors reset to their default positions.")
+    else
+        PrintHelp()
     end
 end

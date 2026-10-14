@@ -1,37 +1,20 @@
-local AR = AndeReminders
+local AR    = AndeReminders
+local Fonts = AR.Fonts
 
 local EncounterModule = {}
 local combatTextFrame = nil
-
-local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
-
-local FALLBACK_FONT_NAMES = { "Friz Quadrata TT", "Morpheus", "Skurri", "Arial Narrow" }
-local FALLBACK_FONT_PATHS = {
-    ["Friz Quadrata TT"] = "Fonts\\FRIZQT__.TTF",
-    ["Morpheus"]         = "Fonts\\MORPHEUS.ttf",
-    ["Skurri"]           = "Fonts\\skurri.ttf",
-    ["Arial Narrow"]     = "Fonts\\ARIALN.TTF",
-}
-local DEFAULT_FONT_NAME = "Friz Quadrata TT"
-
-local function GetFontNames()
-    if LSM then return LSM:List("font") end
-    return FALLBACK_FONT_NAMES
-end
-
-local function ResolveFontPath(name)
-    if LSM then
-        local path = LSM:Fetch("font", name)
-        if path then return path end
-    end
-    return FALLBACK_FONT_PATHS[name] or "Fonts\\FRIZQT__.TTF"
-end
 
 local DEFAULT_FONT_SIZE = 28
 local ENTER_DEFAULT = { r = 245/255, g = 103/255, b = 93/255  }  -- #f5675d
 local LEAVE_DEFAULT = { r = 109/255, g = 173/255, b = 252/255 }  -- #6dadfc
 
 local MIDNIGHT_FALLS_ENCOUNTER_ID = 3183
+
+-- Settings option -> the CVars it lowers to 0 for the duration of the fight.
+local MIDNIGHT_FALLS_CVARS = {
+    particleDensity   = { "graphicsParticleDensity",   "RaidGraphicsParticleDensity"   },
+    projectedTextures = { "graphicsProjectedTextures", "RaidGraphicsProjectedTextures" },
+}
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -42,7 +25,7 @@ function EncounterModule:InitDB(db)
     if not db.encounter.combatText then db.encounter.combatText = {} end
     if db.encounter.combatText.enabled  == nil then db.encounter.combatText.enabled  = false end
     if db.encounter.combatText.fontSize == nil then db.encounter.combatText.fontSize = DEFAULT_FONT_SIZE end
-    if db.encounter.combatText.fontName == nil then db.encounter.combatText.fontName = DEFAULT_FONT_NAME end
+    if db.encounter.combatText.fontName == nil then db.encounter.combatText.fontName = Fonts.DEFAULT_NAME end
 
     if not db.encounter.enterText then db.encounter.enterText = {} end
     if db.encounter.enterText.r == nil then db.encounter.enterText.r = ENTER_DEFAULT.r end
@@ -107,7 +90,7 @@ function EncounterModule:ShowCombatText(kind)
 
     local shared   = enc.combatText
     local fontSize = (shared and shared.fontSize) or DEFAULT_FONT_SIZE
-    local fontName = (shared and shared.fontName) or DEFAULT_FONT_NAME
+    local fontName = (shared and shared.fontName) or Fonts.DEFAULT_NAME
 
     local ctf = GetCombatTextFrame()
     ctf.text:ClearAllPoints()
@@ -118,7 +101,7 @@ function EncounterModule:ShowCombatText(kind)
         ctf.text:SetPoint("CENTER", UIParent, "CENTER", 0, 260)
     end
 
-    ctf.text:SetFont(ResolveFontPath(fontName), fontSize, "OUTLINE")
+    Fonts.Apply(ctf.text, fontName, fontSize, "OUTLINE")
     ctf.text:SetTextColor(color.r, color.g, color.b)
     ctf.text:SetText(label)
 
@@ -145,33 +128,32 @@ function EncounterModule:RunCheck() end
 local function ApplyMidnightFallsOverrides()
     local mf = AR.db and AR.db.encounter and AR.db.encounter.midnightFalls
     if not mf then return end
-    if not mf.particleDensity and not mf.projectedTextures then return end
 
-    local restore = {}
-    if mf.particleDensity then
-        restore.graphicsParticleDensity     = GetCVar("graphicsParticleDensity")
-        restore.RaidGraphicsParticleDensity = GetCVar("RaidGraphicsParticleDensity")
-        SetCVar("graphicsParticleDensity",     0)
-        SetCVar("RaidGraphicsParticleDensity", 0)
+    -- Never re-read a CVar this module has already lowered: if an earlier override was not
+    -- restored yet, the current value is our own 0 and the saved original must survive.
+    local restore = mf.pendingRestore or {}
+    for option, cvars in pairs(MIDNIGHT_FALLS_CVARS) do
+        if mf[option] then
+            for _, cvar in ipairs(cvars) do
+                local current = GetCVar(cvar)
+                if current ~= nil then  -- skip CVars this client does not have
+                    if restore[cvar] == nil then restore[cvar] = current end
+                    SetCVar(cvar, 0)
+                end
+            end
+        end
     end
-    if mf.projectedTextures then
-        restore.graphicsProjectedTextures     = GetCVar("graphicsProjectedTextures")
-        restore.RaidGraphicsProjectedTextures = GetCVar("RaidGraphicsProjectedTextures")
-        SetCVar("graphicsProjectedTextures",     0)
-        SetCVar("RaidGraphicsProjectedTextures", 0)
-    end
-    mf.pendingRestore = restore
+
+    if next(restore) ~= nil then mf.pendingRestore = restore end
 end
 
 local function RestoreMidnightFallsOverrides()
     local mf = AR.db and AR.db.encounter and AR.db.encounter.midnightFalls
     if not mf or not mf.pendingRestore then return end
 
-    local r = mf.pendingRestore
-    if r.graphicsParticleDensity     then SetCVar("graphicsParticleDensity",     r.graphicsParticleDensity)     end
-    if r.RaidGraphicsParticleDensity then SetCVar("RaidGraphicsParticleDensity", r.RaidGraphicsParticleDensity) end
-    if r.graphicsProjectedTextures     then SetCVar("graphicsProjectedTextures",     r.graphicsProjectedTextures)     end
-    if r.RaidGraphicsProjectedTextures then SetCVar("RaidGraphicsProjectedTextures", r.RaidGraphicsProjectedTextures) end
+    for cvar, value in pairs(mf.pendingRestore) do
+        SetCVar(cvar, value)
+    end
 
     mf.pendingRestore = nil
 end
@@ -215,171 +197,6 @@ combatEvents:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- ---------------------------------------------------------------------------
--- Settings UI helpers
--- ---------------------------------------------------------------------------
-
-local function BuildColorSwatch(parent, cfg)
-    local swatch = CreateFrame("Button", nil, parent)
-    swatch:SetSize(22, 22)
-
-    local border = swatch:CreateTexture(nil, "BACKGROUND")
-    border:SetAllPoints()
-    border:SetColorTexture(0.5, 0.5, 0.5, 1)
-
-    local tex = swatch:CreateTexture(nil, "ARTWORK")
-    tex:SetPoint("TOPLEFT",     swatch, "TOPLEFT",     1, -1)
-    tex:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", -1, 1)
-    tex:SetColorTexture(cfg.r, cfg.g, cfg.b)
-
-    swatch:SetScript("OnClick", function()
-        ColorPickerFrame:SetupColorPickerAndShow({
-            r = cfg.r, g = cfg.g, b = cfg.b,
-            hasOpacity = false,
-            swatchFunc = function()
-                local r, g, b = ColorPickerFrame:GetColorRGB()
-                cfg.r, cfg.g, cfg.b = r, g, b
-                tex:SetColorTexture(r, g, b)
-            end,
-            cancelFunc = function(prev)
-                cfg.r, cfg.g, cfg.b = prev.r, prev.g, prev.b
-                tex:SetColorTexture(prev.r, prev.g, prev.b)
-            end,
-        })
-    end)
-
-    return swatch
-end
-
-local function BuildFontDropdown(parent, db, anchorTo)
-    local fontNames = GetFontNames()
-    local fontIndex = 1
-    for i, name in ipairs(fontNames) do
-        if name == db.encounter.combatText.fontName then fontIndex = i; break end
-    end
-
-    local ITEM_HEIGHT  = 20
-    local POPUP_WIDTH  = 180
-    local MAX_LIST_H   = 300
-    local SCROLLBAR_W  = 14
-
-    local totalH       = #fontNames * ITEM_HEIGHT
-    local visibleH     = math.min(totalH, MAX_LIST_H)
-    local maxScroll    = math.max(0, totalH - visibleH)
-    local hasScrollbar = maxScroll > 0
-
-    local dropBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    dropBtn:SetSize(POPUP_WIDTH, 22)
-    dropBtn:SetPoint("LEFT", anchorTo, "RIGHT", 6, 0)
-    local bfs = dropBtn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",dropBtn,"LEFT",8,0); bfs:SetPoint("RIGHT",dropBtn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
-    local arrowFs = dropBtn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",dropBtn,"RIGHT",-5,0); arrowFs:SetText("v")
-    dropBtn:SetText(fontNames[fontIndex])
-
-    local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    popup:SetSize(POPUP_WIDTH, visibleH + 4)
-    popup:SetFrameLevel(parent:GetFrameLevel() + 20)
-    popup:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/Buttons/WHITE8x8",
-        edgeSize = 1,
-        tile = true, tileSize = 32,
-        insets = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    popup:SetBackdropColor(0.08, 0.08, 0.08, 0.97)
-    popup:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-    popup:SetPoint("TOPLEFT", dropBtn, "BOTTOMLEFT", 0, -2)
-    popup:Hide()
-
-    local scrollRightOffset = hasScrollbar and -(SCROLLBAR_W + 4) or -2
-    local scrollFrame = CreateFrame("ScrollFrame", nil, popup)
-    scrollFrame:SetPoint("TOPLEFT",     popup, "TOPLEFT",     2, -2)
-    scrollFrame:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", scrollRightOffset, 2)
-
-    local content = CreateFrame("Frame", nil, scrollFrame)
-    content:SetWidth(POPUP_WIDTH - (hasScrollbar and (SCROLLBAR_W + 6) or 4))
-    content:SetHeight(math.max(totalH, 1))
-    scrollFrame:SetScrollChild(content)
-
-    local itemBtns = {}
-    for i, name in ipairs(fontNames) do
-        local btn = CreateFrame("Button", nil, content)
-        btn:SetHeight(ITEM_HEIGHT)
-        btn:SetPoint("TOPLEFT",  content, "TOPLEFT",  0, -(i - 1) * ITEM_HEIGHT)
-        btn:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -(i - 1) * ITEM_HEIGHT)
-
-        local hlTex = btn:CreateTexture(nil, "HIGHLIGHT")
-        hlTex:SetAllPoints()
-        hlTex:SetColorTexture(1, 1, 1, 0.10)
-
-        local selTex = btn:CreateTexture(nil, "BACKGROUND")
-        selTex:SetAllPoints()
-        selTex:SetColorTexture(0.2, 0.4, 0.8, 0.25)
-        selTex:SetShown(i == fontIndex)
-        btn.selTex = selTex
-
-        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("LEFT",  btn, "LEFT",  6,  0)
-        lbl:SetPoint("RIGHT", btn, "RIGHT", -2, 0)
-        lbl:SetJustifyH("LEFT")
-        lbl:SetText(name)
-        lbl:SetFont(ResolveFontPath(name), 12, "")
-
-        btn:SetScript("OnClick", function()
-            if itemBtns[fontIndex] then itemBtns[fontIndex].selTex:Hide() end
-            fontIndex = i
-            db.encounter.combatText.fontName = name
-            dropBtn:SetText(name)
-            btn.selTex:Show()
-            popup:Hide()
-        end)
-
-        itemBtns[i] = btn
-    end
-
-    if hasScrollbar then
-        local scrollBar = CreateFrame("Slider", nil, popup)
-        scrollBar:SetOrientation("VERTICAL")
-        scrollBar:SetWidth(SCROLLBAR_W)
-        scrollBar:SetPoint("TOPRIGHT",    popup, "TOPRIGHT",    -2, -18)
-        scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -2,  18)
-        local thumb = scrollBar:CreateTexture(nil, "OVERLAY")
-        thumb:SetTexture("Interface/Buttons/UI-ScrollBar-Knob")
-        thumb:SetSize(14, 14)
-        scrollBar:SetThumbTexture(thumb)
-        scrollBar:SetMinMaxValues(0, maxScroll)
-        scrollBar:SetValue(0)
-        scrollBar:SetValueStep(ITEM_HEIGHT)
-        scrollBar:SetObeyStepOnDrag(true)
-        scrollBar:SetScript("OnValueChanged", function(self, value)
-            scrollFrame:SetVerticalScroll(value)
-        end)
-
-        scrollFrame:EnableMouseWheel(true)
-        scrollFrame:SetScript("OnMouseWheel", function(_, delta)
-            local cur = scrollBar:GetValue()
-            local mn, mx = scrollBar:GetMinMaxValues()
-            scrollBar:SetValue(math.max(mn, math.min(mx, cur - delta * ITEM_HEIGHT * 3)))
-        end)
-
-        dropBtn:SetScript("OnClick", function()
-            if popup:IsShown() then
-                popup:Hide()
-            else
-                popup:Show()
-                scrollBar:SetValue(math.min((fontIndex - 1) * ITEM_HEIGHT, maxScroll))
-            end
-        end)
-    else
-        dropBtn:SetScript("OnClick", function()
-            if popup:IsShown() then popup:Hide() else popup:Show() end
-        end)
-    end
-
-    parent:HookScript("OnHide", function() popup:Hide() end)
-
-    return dropBtn
-end
-
--- ---------------------------------------------------------------------------
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
@@ -400,6 +217,13 @@ function EncounterModule:BuildUI(parent, db)
 
     y = y - 22
 
+    -- Swatch bound to an { r, g, b } config table.
+    local function ColorSwatchFor(cfg)
+        return AR.UI.ColorSwatch(parent,
+            function() return cfg.r, cfg.g, cfg.b end,
+            function(r, g, b) cfg.r, cfg.g, cfg.b = r, g, b end)
+    end
+
     -- 1. Enable checkbox
     local cbEnable = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
     cbEnable:SetSize(24, 24)
@@ -418,7 +242,7 @@ function EncounterModule:BuildUI(parent, db)
     enterLabel:SetPoint("LEFT", enableLabel, "RIGHT", 16, 0)
     enterLabel:SetText("+Combat:")
 
-    local enterSwatch = BuildColorSwatch(parent, db.encounter.enterText)
+    local enterSwatch = ColorSwatchFor(db.encounter.enterText)
     enterSwatch:SetPoint("LEFT", enterLabel, "RIGHT", 6, 0)
 
     -- 3. Leave combat color
@@ -426,7 +250,7 @@ function EncounterModule:BuildUI(parent, db)
     leaveLabel:SetPoint("LEFT", enterSwatch, "RIGHT", 12, 0)
     leaveLabel:SetText("-Combat:")
 
-    local leaveSwatch = BuildColorSwatch(parent, db.encounter.leaveText)
+    local leaveSwatch = ColorSwatchFor(db.encounter.leaveText)
     leaveSwatch:SetPoint("LEFT", leaveLabel, "RIGHT", 6, 0)
 
     -- 4. Shared font size
@@ -456,16 +280,15 @@ function EncounterModule:BuildUI(parent, db)
     fontLabel:SetPoint("LEFT", sizeInput, "RIGHT", 14, 1)
     fontLabel:SetText("Font:")
 
-    BuildFontDropdown(parent, db, fontLabel)
+    local fontDropdown = AR.UI.Dropdown(parent, 180, Fonts.List(),
+        function() return db.encounter.combatText.fontName end,
+        function(name) db.encounter.combatText.fontName = name end,
+        { kind = "font", maxHeight = 300 })
+    fontDropdown:SetPoint("LEFT", fontLabel, "RIGHT", 6, 0)
 
     y = y - 36
 
-    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div:SetHeight(1)
-    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, y)
-    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, y)
+    AR.UI.Divider(parent, y)
 
     y = y - 14
 

@@ -1,31 +1,11 @@
-local AR = AndeReminders
+local AR    = AndeReminders
+local Util  = AR.Util
+local Fonts = AR.Fonts
 
 local TalentModule = {}
 local buildTextFrame = nil
 
-local LSM = LibStub and LibStub("LibSharedMedia-3.0", true)
-
-local FALLBACK_FONT_NAMES = { "Friz Quadrata TT", "Morpheus", "Skurri", "Arial Narrow" }
-local FALLBACK_FONT_PATHS = {
-    ["Friz Quadrata TT"] = "Fonts\\FRIZQT__.TTF",
-    ["Morpheus"]         = "Fonts\\MORPHEUS.ttf",
-    ["Skurri"]           = "Fonts\\skurri.ttf",
-    ["Arial Narrow"]     = "Fonts\\ARIALN.TTF",
-}
-local DEFAULT_FONT_NAME = "Friz Quadrata TT"
-
-local function GetFontNames()
-    if LSM then return LSM:List("font") end
-    return FALLBACK_FONT_NAMES
-end
-
-local function ResolveFontPath(name)
-    if LSM then
-        local path = LSM:Fetch("font", name)
-        if path then return path end
-    end
-    return FALLBACK_FONT_PATHS[name] or "Fonts\\FRIZQT__.TTF"
-end
+local STARTER_BUILD_NAME = TALENT_FRAME_DROP_DOWN_STARTER_BUILD or "Starter Build"
 
 -- ---------------------------------------------------------------------------
 -- Database
@@ -36,7 +16,7 @@ function TalentModule:InitDB(db)
     if not db.talents.checks then db.talents.checks = {} end
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
     if not db.talents.buildText then db.talents.buildText = {} end
-    if not db.talents.buildText.fontName then db.talents.buildText.fontName = DEFAULT_FONT_NAME end
+    if not db.talents.buildText.fontName then db.talents.buildText.fontName = Fonts.DEFAULT_NAME end
     if db.talents.buildText.fontSize == nil then db.talents.buildText.fontSize = 36 end
     if db.talents.buildText.r == nil then db.talents.buildText.r = 1   end
     if db.talents.buildText.g == nil then db.talents.buildText.g = 0.8 end
@@ -69,7 +49,7 @@ end
 function TalentModule:ShowBuildText(name, icon)
     local btf = GetBuildTextFrame()
     local cfg = AR.db and AR.db.talents and AR.db.talents.buildText
-    local fontName = (cfg and cfg.fontName) or DEFAULT_FONT_NAME
+    local fontName = (cfg and cfg.fontName) or Fonts.DEFAULT_NAME
     local fontSize = (cfg and cfg.fontSize) or 36
     local r = (cfg and cfg.r) or 1
     local g = (cfg and cfg.g) or 0.8
@@ -83,7 +63,7 @@ function TalentModule:ShowBuildText(name, icon)
         btf.text:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
     end
 
-    btf.text:SetFont(ResolveFontPath(fontName), fontSize, "OUTLINE")
+    Fonts.Apply(btf.text, fontName, fontSize, "OUTLINE")
     btf.text:SetTextColor(r, g, b)
 
     local displayText
@@ -113,7 +93,6 @@ end
 local function GetActiveLoadoutInfo()
     if C_AddOns and C_AddOns.LoadAddOn then
         C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
-        C_AddOns.LoadAddOn("Blizzard_TalentUI")
         C_AddOns.LoadAddOn("TalentLoadoutEx")
     end
 
@@ -124,10 +103,14 @@ local function GetActiveLoadoutInfo()
         end
     end
 
-    local specIndex = GetSpecialization()
-    if not specIndex then return nil, nil end
-    local specID = select(1, GetSpecializationInfo(specIndex))
+    local _, specID = Util.GetSpec()
     if not specID then return nil, nil end
+
+    -- Until the starter build is edited it is the active loadout and has no saved config.
+    if C_ClassTalents.GetStarterBuildActive() then
+        return STARTER_BUILD_NAME, nil
+    end
+
     local configID = C_ClassTalents.GetLastSelectedSavedConfigID(specID)
     if configID then
         local info = C_Traits.GetConfigInfo(configID)
@@ -166,7 +149,13 @@ talentEvents:SetScript("OnEvent", function(self, event)
         if buildTextFrame then buildTextFrame:Hide() end
     elseif event == "PLAYER_ENTERING_WORLD" and not tlxInitDone then
         tlxInitDone = true
+        -- TalentLoadoutEx only has data once the talent frame has been shown once, so flash it
+        -- open and shut shortly after login. Skipped in combat: it is a managed UI panel.
         C_Timer.After(2, function()
+            if InCombatLockdown() then
+                tlxInitDone = false  -- try again at the next loading screen
+                return
+            end
             if C_AddOns and C_AddOns.LoadAddOn then
                 C_AddOns.LoadAddOn("Blizzard_PlayerSpells")
                 C_AddOns.LoadAddOn("TalentLoadoutEx")
@@ -214,12 +203,7 @@ function TalentModule:BuildUI(parent, db)
     tleNote:SetTextColor(0.5, 0.5, 0.5)
 
     y = y - 18
-    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div:SetHeight(1)
-    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, y)
-    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, y)
+    AR.UI.Divider(parent, y)
 
     y = y - 14
 
@@ -234,165 +218,27 @@ function TalentModule:BuildUI(parent, db)
     fontLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
     fontLabel:SetText("Font:")
 
-    local fontNames = GetFontNames()
-    local fontIndex = 1
-    for i, name in ipairs(fontNames) do
-        if name == db.talents.buildText.fontName then fontIndex = i; break end
-    end
-
-    local ITEM_HEIGHT  = 20
-    local POPUP_WIDTH  = 200
-    local MAX_LIST_H   = 300
-    local SCROLLBAR_W  = 14
-
-    local totalH      = #fontNames * ITEM_HEIGHT
-    local visibleH    = math.min(totalH, MAX_LIST_H)
-    local maxScroll   = math.max(0, totalH - visibleH)
-    local hasScrollbar = maxScroll > 0
-
-    local dropBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    dropBtn:SetSize(POPUP_WIDTH, 22)
+    local dropBtn = AR.UI.Dropdown(parent, 200, Fonts.List(),
+        function() return db.talents.buildText.fontName end,
+        function(name) db.talents.buildText.fontName = name end,
+        { kind = "font", maxHeight = 300 })
     dropBtn:SetPoint("LEFT", fontLabel, "RIGHT", 10, 0)
-    local bfs = dropBtn:GetFontString(); bfs:ClearAllPoints(); bfs:SetPoint("LEFT",dropBtn,"LEFT",8,0); bfs:SetPoint("RIGHT",dropBtn,"RIGHT",-18,0); bfs:SetJustifyH("LEFT")
-    local arrowFs = dropBtn:CreateFontString(nil,"OVERLAY","GameFontNormal"); arrowFs:SetPoint("RIGHT",dropBtn,"RIGHT",-5,0); arrowFs:SetText("v")
-    dropBtn:SetText(fontNames[fontIndex])
-
-    local popup = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    popup:SetSize(POPUP_WIDTH, visibleH + 4)
-    popup:SetFrameLevel(parent:GetFrameLevel() + 20)
-    popup:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/Buttons/WHITE8x8",
-        edgeSize = 1,
-        tile = true, tileSize = 32,
-        insets = { left = 2, right = 2, top = 2, bottom = 2 },
-    })
-    popup:SetBackdropColor(0.08, 0.08, 0.08, 0.97)
-    popup:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
-    popup:SetPoint("TOPLEFT", dropBtn, "BOTTOMLEFT", 0, -2)
-    popup:Hide()
-
-    local scrollRightOffset = hasScrollbar and -(SCROLLBAR_W + 4) or -2
-    local scrollFrame = CreateFrame("ScrollFrame", nil, popup)
-    scrollFrame:SetPoint("TOPLEFT",     popup, "TOPLEFT",     2, -2)
-    scrollFrame:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", scrollRightOffset, 2)
-
-    local content = CreateFrame("Frame", nil, scrollFrame)
-    content:SetWidth(POPUP_WIDTH - (hasScrollbar and (SCROLLBAR_W + 6) or 4))
-    content:SetHeight(math.max(totalH, 1))
-    scrollFrame:SetScrollChild(content)
-
-    local itemBtns = {}
-    for i, name in ipairs(fontNames) do
-        local btn = CreateFrame("Button", nil, content)
-        btn:SetHeight(ITEM_HEIGHT)
-        btn:SetPoint("TOPLEFT",  content, "TOPLEFT",  0, -(i - 1) * ITEM_HEIGHT)
-        btn:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -(i - 1) * ITEM_HEIGHT)
-
-        local hlTex = btn:CreateTexture(nil, "HIGHLIGHT")
-        hlTex:SetAllPoints()
-        hlTex:SetColorTexture(1, 1, 1, 0.10)
-
-        local selTex = btn:CreateTexture(nil, "BACKGROUND")
-        selTex:SetAllPoints()
-        selTex:SetColorTexture(0.2, 0.4, 0.8, 0.25)
-        selTex:SetShown(i == fontIndex)
-        btn.selTex = selTex
-
-        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        lbl:SetPoint("LEFT",  btn, "LEFT",  6,  0)
-        lbl:SetPoint("RIGHT", btn, "RIGHT", -2, 0)
-        lbl:SetJustifyH("LEFT")
-        lbl:SetText(name)
-        lbl:SetFont(ResolveFontPath(name), 12, "")
-
-        btn:SetScript("OnClick", function()
-            if itemBtns[fontIndex] then itemBtns[fontIndex].selTex:Hide() end
-            fontIndex = i
-            db.talents.buildText.fontName = name
-            dropBtn:SetText(name)
-            btn.selTex:Show()
-            popup:Hide()
-        end)
-
-        itemBtns[i] = btn
-    end
-
-    if hasScrollbar then
-        local scrollBar = CreateFrame("Slider", nil, popup)
-        scrollBar:SetOrientation("VERTICAL")
-        scrollBar:SetWidth(SCROLLBAR_W)
-        scrollBar:SetPoint("TOPRIGHT",    popup, "TOPRIGHT",    -2, -18)
-        scrollBar:SetPoint("BOTTOMRIGHT", popup, "BOTTOMRIGHT", -2,  18)
-        local thumb = scrollBar:CreateTexture(nil, "OVERLAY")
-        thumb:SetTexture("Interface/Buttons/UI-ScrollBar-Knob")
-        thumb:SetSize(14, 14)
-        scrollBar:SetThumbTexture(thumb)
-        scrollBar:SetMinMaxValues(0, maxScroll)
-        scrollBar:SetValue(0)
-        scrollBar:SetValueStep(ITEM_HEIGHT)
-        scrollBar:SetObeyStepOnDrag(true)
-        scrollBar:SetScript("OnValueChanged", function(self, value)
-            scrollFrame:SetVerticalScroll(value)
-        end)
-
-        scrollFrame:EnableMouseWheel(true)
-        scrollFrame:SetScript("OnMouseWheel", function(_, delta)
-            local cur = scrollBar:GetValue()
-            local min, max = scrollBar:GetMinMaxValues()
-            scrollBar:SetValue(math.max(min, math.min(max, cur - delta * ITEM_HEIGHT * 3)))
-        end)
-
-        dropBtn:SetScript("OnClick", function()
-            if popup:IsShown() then
-                popup:Hide()
-            else
-                popup:Show()
-                scrollBar:SetValue(math.min((fontIndex - 1) * ITEM_HEIGHT, maxScroll))
-            end
-        end)
-    else
-        dropBtn:SetScript("OnClick", function()
-            if popup:IsShown() then popup:Hide() else popup:Show() end
-        end)
-    end
-
-    parent:HookScript("OnHide", function() popup:Hide() end)
 
     -- ---- Color picker ----
     local colorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     colorLabel:SetPoint("LEFT", dropBtn, "RIGHT", 20, 0)
     colorLabel:SetText("Color:")
 
-    local swatch = CreateFrame("Button", nil, parent)
-    swatch:SetSize(22, 22)
+    local swatch = AR.UI.ColorSwatch(parent,
+        function()
+            local cfg = db.talents.buildText
+            return cfg.r, cfg.g, cfg.b
+        end,
+        function(r, g, b)
+            local cfg = db.talents.buildText
+            cfg.r, cfg.g, cfg.b = r, g, b
+        end)
     swatch:SetPoint("LEFT", colorLabel, "RIGHT", 8, 0)
-
-    local swatchBorder = swatch:CreateTexture(nil, "BACKGROUND")
-    swatchBorder:SetAllPoints()
-    swatchBorder:SetColorTexture(0.5, 0.5, 0.5, 1)
-
-    local swatchTex = swatch:CreateTexture(nil, "ARTWORK")
-    swatchTex:SetPoint("TOPLEFT",     swatch, "TOPLEFT",     1, -1)
-    swatchTex:SetPoint("BOTTOMRIGHT", swatch, "BOTTOMRIGHT", -1, 1)
-    swatchTex:SetColorTexture(db.talents.buildText.r, db.talents.buildText.g, db.talents.buildText.b)
-
-    swatch:SetScript("OnClick", function()
-        local cfg = db.talents.buildText
-        ColorPickerFrame:SetupColorPickerAndShow({
-            r = cfg.r, g = cfg.g, b = cfg.b,
-            hasOpacity = false,
-            swatchFunc = function()
-                local r, g, b = ColorPickerFrame:GetColorRGB()
-                cfg.r, cfg.g, cfg.b = r, g, b
-                swatchTex:SetColorTexture(r, g, b)
-            end,
-            cancelFunc = function(prev)
-                cfg.r, cfg.g, cfg.b = prev.r, prev.g, prev.b
-                swatchTex:SetColorTexture(prev.r, prev.g, prev.b)
-            end,
-        })
-    end)
 
     -- ---- Font size input (same row as font/color) ----
     local sizeLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -422,23 +268,36 @@ function TalentModule:BuildUI(parent, db)
     previewBtn:SetPoint("LEFT", sizeInput, "RIGHT", 16, 1)
     previewBtn:SetText("Preview")
 
-    previewBtn:SetScript("OnClick", function()
+    local previewing = false
+
+    local function HidePreview()
         local btf = GetBuildTextFrame()
-        if btf:IsShown() then
-            if btf.hideTimer then btf.hideTimer:Cancel(); btf.hideTimer = nil end
-            btf:Hide()
-            previewBtn:SetText("Preview")
+        if btf.hideTimer then btf.hideTimer:Cancel(); btf.hideTimer = nil end
+        btf:Hide()
+        previewing = false
+        previewBtn:SetText("Preview")
+    end
+
+    previewBtn:SetScript("OnClick", function()
+        if GetBuildTextFrame():IsShown() then
+            HidePreview()
         else
             local name, icon = GetActiveLoadoutInfo()
             TalentModule:ShowBuildText(name or "Your Talent Build", icon)
-            local btf2 = GetBuildTextFrame()
-            if btf2.hideTimer then btf2.hideTimer:Cancel(); btf2.hideTimer = nil end
+            local btf = GetBuildTextFrame()
+            if btf.hideTimer then btf.hideTimer:Cancel(); btf.hideTimer = nil end
+            previewing = true
             previewBtn:SetText("Hide Preview")
         end
     end)
 
+    -- Leaving the tab (or closing the window) dismisses a preview this tab started.
     parent:HookScript("OnHide", function()
-        previewBtn:SetText("Preview")
+        if previewing then
+            HidePreview()
+        else
+            previewBtn:SetText("Preview")
+        end
     end)
 end
 

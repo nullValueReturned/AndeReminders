@@ -1,4 +1,5 @@
-local AR = AndeReminders
+local AR   = AndeReminders
+local Util = AR.Util
 
 local QoLModule = {}
 
@@ -15,28 +16,30 @@ local ITEM_COLOR     = "|cFFA335EE"  -- epic purple
 -- Vault data + tooltip
 -- ---------------------------------------------------------------------------
 
+-- Returns the example reward item levels for the raid, Mythic+ and delve rows (indexed by slot,
+-- so a locked slot leaves a gap) plus the highest one. Rows are told apart by activity type, the
+-- same way Blizzard's own vault frame does it, not by their position in the activities list.
 local function getVaultData()
-    local activities = C_WeeklyRewards and C_WeeklyRewards.GetActivities and C_WeeklyRewards.GetActivities()
+    local activities = C_WeeklyRewards.GetActivities()
     if not activities then return {}, {}, {}, nil end
 
+    local threshold = Enum.WeeklyRewardChestThresholdType
     local raidData, mplusData, delveData = {}, {}, {}
+    local rowByType = {
+        [threshold.Raid]       = raidData,
+        [threshold.Activities] = mplusData,
+        [threshold.World]      = delveData,
+    }
     local highest
 
-    for i = 1, 9 do
-        local entry = activities[i]
-        local id = entry and entry.id or 0
-        local itemLink = C_WeeklyRewards.GetExampleRewardItemHyperlinks(id)
+    for _, activity in ipairs(activities) do
+        local row = rowByType[activity.type]
+        local itemLink = row and C_WeeklyRewards.GetExampleRewardItemHyperlinks(activity.id)
         if itemLink then
-            local ilvl = GetDetailedItemLevelInfo(itemLink)
+            local ilvl = C_Item.GetDetailedItemLevelInfo(itemLink)
             if ilvl then
+                row[activity.index] = ilvl
                 if not highest or ilvl > highest then highest = ilvl end
-                if i < 4 then
-                    table.insert(delveData, ilvl)
-                elseif i < 7 then
-                    table.insert(raidData, ilvl)
-                else
-                    table.insert(mplusData, ilvl)
-                end
             end
         end
     end
@@ -59,7 +62,7 @@ local function constructTooltip(tooltip)
     tooltip:AddDoubleLine("Great Vault", ITEM_COLOR .. (highest or "") .. "|r")
     tooltip:AddLine(" ")
 
-    if C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards and C_WeeklyRewards.HasAvailableRewards() then
+    if C_WeeklyRewards.HasAvailableRewards() then
         tooltip:AddLine(ITEM_COLOR .. "Vault rewards available!|r")
         tooltip:AddLine(" ")
     end
@@ -72,7 +75,7 @@ local function constructTooltip(tooltip)
 end
 
 local function CurrentIcon()
-    if C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards and C_WeeklyRewards.HasAvailableRewards() then
+    if C_WeeklyRewards.HasAvailableRewards() then
         return ICON_AVAILABLE
     end
     return ICON_PENDING
@@ -175,12 +178,7 @@ function QoLModule:BuildUI(parent, db)
 
     y = y - 28
 
-    local div = CreateFrame("Frame", nil, parent, "BackdropTemplate")
-    div:SetHeight(1)
-    div:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-    div:SetBackdropColor(0.28, 0.28, 0.28, 1)
-    div:SetPoint("TOPLEFT",  parent, "TOPLEFT",  5, y)
-    div:SetPoint("TOPRIGHT", parent, "TOPRIGHT", -5, y)
+    AR.UI.Divider(parent, y)
 
     y = y - 14
 
@@ -211,10 +209,8 @@ end
 local function AutoAcceptLFGRoleCheck()
     if not AR.db or not AR.db.qol or not AR.db.qol.autoAcceptLFG.enabled then return end
 
-    local role = UnitGroupRolesAssigned("player")
-    if role == "NONE" then
-        role = GetSpecializationRole(GetSpecialization())
-    end
+    local role = Util.GetRole()
+    if not role then return end  -- no spec chosen yet: leave the choice to the player
 
     local tank   = role == "TANK"
     local healer = role == "HEALER"
@@ -247,7 +243,8 @@ events:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 events:RegisterEvent("LFG_ROLE_CHECK_SHOW")
 events:SetScript("OnEvent", function(_, event)
     if event == "LFG_ROLE_CHECK_SHOW" then
-        AutoAcceptLFGRoleCheck()
+        -- Next frame: Blizzard's own handler has to finish populating the popup first.
+        RunNextFrame(AutoAcceptLFGRoleCheck)
     else
         RecheckIcon()
     end

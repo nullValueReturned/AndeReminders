@@ -1,24 +1,25 @@
 # AndeReminders
 
-A lightweight World of Warcraft addon (The War Within) that nudges you about the small things you forget right before pulls — talent build, missing enchants, low durability, wrong weapon — plus a few quality-of-life utilities for combat and encounters.
+A lightweight World of Warcraft addon (Midnight, patch 12.1.5) that nudges you about the small things you forget right before pulls — talent build, missing enchants, low durability, wrong weapon — plus quality-of-life utilities and a custom boss-mod alert builder for BigWigs / DBM.
 
 ## Features
 
 ### Talents
 - Flashes your active talent loadout name + icon on screen when a ready check fires.
-- Uses [TalentLoadoutEx](https://www.curseforge.com/wow/addons/talent-loadout-ex) names and icons if installed; otherwise falls back to the native saved-config name.
+- Uses [TalentLoadoutEx](https://www.curseforge.com/wow/addons/talent-loadout-ex) names and icons if installed; otherwise falls back to the native saved loadout name (or "Starter Build" while that is active).
 - Configurable font, size, and color. Shows `unknown talent loadout` if none is detected.
 
 ### Gear
 On login, zone change, and equip, checks for:
-- **Wrong weapon type** for your spec
+- **Wrong weapon type** for your spec (2H / 1H / shield, judged by equip location so new weapon types just work)
 - **Wrong primary stat** on your weapon
-- **Item level below a configurable threshold**
+- **Item level below a configurable threshold** (uses the item's effective level, so upgraded gear is judged correctly)
+- **Missing Goblin Glider cloak tinker** for Engineers (language independent)
 
-Notifications can be on-screen, in chat, or both.
+Notifications can be on-screen, in chat, or both. Equipment changed mid-fight is re-checked when combat ends.
 
 ### Repair
-Continuous durability monitor. A large on-screen banner appears the moment any slot drops below 50% durability (out of combat).
+Continuous durability monitor. A large on-screen banner appears the moment any slot drops below a configurable durability threshold (default 50%, out of combat), including right after login if you log in damaged.
 
 ### Enchants
 - Checks every enchantable slot for missing enchants on login/zone/equip.
@@ -29,6 +30,24 @@ Continuous durability monitor. A large on-screen banner appears the moment any s
 - **Combat in/out text** — flashes `+Combat` / `-Combat` when you enter or leave combat. Independent size and color per direction. Off by default.
 - **Midnight Falls graphics overrides** (Encounter ID 3183) — optionally drops `graphicsParticleDensity` / `RaidGraphicsParticleDensity` and/or projected-textures CVars to `0` for the duration of the fight, then restores your original values on `ENCOUNTER_END`. Saved values are written to SavedVariables, so a mid-encounter `/reload` or disconnect still restores the originals on next login.
 
+### Quality of Life
+- **Great Vault minimap button** — hover for the example reward item levels of your Raid, Mythic+ and Delve slots; click to open the vault. The icon changes when rewards are waiting.
+- **Auto-accept LFG role checks** — uses your assigned role, or your spec role if none is assigned. Off by default.
+
+### World Markers
+Keybinds for the eight world markers and "clear all". Markers are placed at your feet, or at the mouse cursor if you enable that option. Bindings are re-applied every login, and retried after combat if a reload happened mid-fight.
+
+### BossMods
+Build your own alerts on top of BigWigs or DBM:
+- Entry types: **Icon**, **Text**, **Progress bar**, and **Group** (stacks its members).
+- Triggers: a boss-mod announce message or a boss-mod timer, filtered by spell ID, text (contains / equals / Lua pattern), count, and boss stage; timers can appear only when N seconds remain.
+- Load conditions: class, role, encounter, zone (or zone group), difficulty.
+- Display options: font, size, color, icon override (with a searchable icon picker), progress swipe, a `%m` message / `%c` count / `%t` time template, anchor point and offset.
+- Conditions: on show, on hide, or at a remaining time — glow (pixel / proc / auto-cast), play a sound, scale, recolor, or flash.
+- Export and import entries (or whole groups) as copy-pasteable strings.
+
+Boss-mod text that the game marks as secret (12.x) is never read by the addon; those entries simply fall back to their own name.
+
 ## Anchors
 
 Every notification type has its own draggable anchor frame. Open settings, click **Toggle Anchors**, and drag the colored boxes wherever you want them. Positions are saved per account.
@@ -37,13 +56,18 @@ Every notification type has its own draggable anchor frame. Open settings, click
 
 | Command | Action |
 | --- | --- |
-| `/ar` | Toggle the settings window |
+| `/ar` | Toggle the settings window (Escape closes it) |
 | `/ar anchors` | Show / hide the anchor frames |
+| `/ar reset` | Put every anchor back at its default position |
+| `/ar help` | List the commands |
+| `/arbm list` | List BossMods entries and their trigger types |
+| `/arbm trigger` | Fire a 10s test timer to check which entries would match |
 
 ## Optional dependencies
 
-- **LibSharedMedia-3.0** — extra font choices. Falls back to four built-in WoW fonts if missing.
-- **TalentLoadoutEx** — adds loadout names and icons to the talent reminder. Falls back to native saved-config names if missing.
+- **LibSharedMedia-3.0** — extra font, bar texture and sound choices. Falls back to four built-in WoW fonts if missing.
+- **TalentLoadoutEx** — adds loadout names and icons to the talent reminder. Falls back to native saved-loadout names if missing.
+- **BigWigs** or **DBM** — required for BossMods entries to trigger.
 
 ## Installation
 
