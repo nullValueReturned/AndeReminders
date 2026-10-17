@@ -34,8 +34,11 @@ Continuous durability monitor. A large on-screen banner appears the moment any s
 - **Great Vault minimap button** — hover for the example reward item levels of your Raid, Mythic+ and Delve slots; click to open the vault. The icon changes when rewards are waiting.
 - **Auto-accept LFG role checks** — uses your assigned role, or your spec role if none is assigned. Off by default.
 
-### World Markers
+### World markers
 Keybinds for the eight world markers and "clear all". Markers are placed at your feet, or at the mouse cursor if you enable that option. Bindings are re-applied every login, and retried after combat if a reload happened mid-fight.
+
+### Target markers
+Keybinds for the eight raid target icons (applied to your current target) and a "clear all" that unmarks every unit it can reach: you, your group and their targets, nameplates, boss frames, target, focus and mouseover. Needs group leader or assist when grouped.
 
 ### BossMods
 Build your own alerts on top of BigWigs or DBM:

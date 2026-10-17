@@ -1,7 +1,8 @@
 local AR   = AndeReminders
 local Util = AR.Util
 
-local WorldMarkersModule = {}
+local WorldMarkersModule  = {}
+local TargetMarkersModule = {}
 
 -- World marker placement is a protected action (requires a hardware event),
 -- so the real placement has to run through a SecureActionButtonTemplate with
@@ -10,11 +11,16 @@ local WorldMarkersModule = {}
 local BUTTON_PREFIX     = "AndeRemindersWM"
 local CLEAR_BUTTON_NAME = "AndeRemindersWMClear"
 
+-- Target markers (raid target icons) use the same approach: secure buttons that
+-- run "/tm N" on the current target, bound to physical keys.
+local TM_BUTTON_PREFIX     = "AndeRemindersTM"
+local TM_CLEAR_BUTTON_NAME = "AndeRemindersTMClear"
+
 -- World marker indices (/wm N) do NOT follow the same order as raid target
 -- icons (/raid_target N). This mapping was confirmed in-game:
 --   1 Blue Square, 2 Green Triangle, 3 Purple Diamond, 4 Red Cross,
 --   5 Yellow Star, 6 Orange Circle, 7 Pale Blue Moon, 8 White Skull
-local ACTIONS = {
+local WORLD_ACTIONS = {
     { key = "star",     label = "Star (Yellow)",       index = 5 },
     { key = "circle",   label = "Circle (Orange)",     index = 6 },
     { key = "diamond",  label = "Diamond (Purple)",    index = 3 },
@@ -26,17 +32,38 @@ local ACTIONS = {
     { key = "clearAll", label = "Clear All Markers" },
 }
 
-for _, action in ipairs(ACTIONS) do
-    if action.key == "clearAll" then
-        action.bindingTarget = "CLICK " .. CLEAR_BUTTON_NAME .. ":LeftButton"
-    else
-        action.bindingTarget = "CLICK " .. BUTTON_PREFIX .. action.index .. ":LeftButton"
+-- Raid target icon indices (/tm N): 1 Star, 2 Circle, 3 Diamond, 4 Triangle,
+-- 5 Moon, 6 Square, 7 Cross, 8 Skull.
+local TARGET_ICON_NAMES = { "Star", "Circle", "Diamond", "Triangle", "Moon", "Square", "Cross", "Skull" }
+local TARGET_ACTIONS = {}
+for i, name in ipairs(TARGET_ICON_NAMES) do
+    TARGET_ACTIONS[i] = {
+        key   = "tm" .. i,
+        label = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_" .. i .. ":16|t " .. name,
+        index = i,
+    }
+end
+TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "clearAll", label = "Clear All Target Markers" }
+
+local GROUPS = {
+    world  = { dbKey = "worldMarkers",  actions = WORLD_ACTIONS,  buttonPrefix = BUTTON_PREFIX,    clearName = CLEAR_BUTTON_NAME },
+    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX, clearName = TM_CLEAR_BUTTON_NAME },
+}
+local GROUP_ORDER = { GROUPS.world, GROUPS.target }
+
+for _, group in ipairs(GROUP_ORDER) do
+    for _, action in ipairs(group.actions) do
+        if action.key == "clearAll" then
+            action.bindingTarget = "CLICK " .. group.clearName .. ":LeftButton"
+        else
+            action.bindingTarget = "CLICK " .. group.buttonPrefix .. action.index .. ":LeftButton"
+        end
     end
 end
 
 local markerButtons = {}
 local clearButton
-local rowRefreshers = {}
+local targetClearButton
 
 -- ---------------------------------------------------------------------------
 -- Secure buttons
@@ -80,6 +107,47 @@ local function EnsureButtons(useCursor)
     ApplyMarkerMode(useCursor)
 end
 
+-- Raid target icons have no "clear all" call, so unmark every unit we can reach.
+-- SetRaidTarget isn't protected, so the clear button is a plain (insecure) button
+-- and works in combat too. Marks on mobs that are neither targetable by us nor
+-- on a visible nameplate can't be reached.
+local function ClearUnit(unit)
+    if UnitExists(unit) and GetRaidTargetIndex(unit) then
+        SetRaidTarget(unit, 0)
+    end
+end
+
+local function ClearAllTargetMarkers()
+    for _, unit in ipairs({ "player", "pet", "target", "focus", "mouseover", "targettarget" }) do
+        ClearUnit(unit)
+    end
+    for i = 1, 4 do
+        ClearUnit("party" .. i)
+        ClearUnit("party" .. i .. "target")
+    end
+    for i = 1, 40 do
+        ClearUnit("raid" .. i)
+        ClearUnit("raid" .. i .. "target")
+        ClearUnit("nameplate" .. i)
+    end
+    for i = 1, 8 do
+        ClearUnit("boss" .. i)
+    end
+end
+
+local function EnsureTargetButtons()
+    if targetClearButton then return end
+    for i = 1, 8 do
+        local btn = CreateFrame("Button", TM_BUTTON_PREFIX .. i, nil, "SecureActionButtonTemplate")
+        btn:SetAttribute("type", "macro")
+        btn:SetAttribute("macrotext", (SLASH_TARGET_MARKER1 or "/tm") .. " " .. i)
+        btn:RegisterForClicks("AnyUp", "AnyDown")
+    end
+    targetClearButton = CreateFrame("Button", TM_CLEAR_BUTTON_NAME, nil)
+    targetClearButton:RegisterForClicks("AnyDown")
+    targetClearButton:SetScript("OnClick", ClearAllTargetMarkers)
+end
+
 -- ---------------------------------------------------------------------------
 -- Keybind storage
 -- ---------------------------------------------------------------------------
@@ -92,39 +160,45 @@ local function ApplyAllBindings(db)
         pendingBindingApply = true
         return false
     end
-    for _, action in ipairs(ACTIONS) do
-        local key = db.worldMarkers.keybinds[action.key]
-        if key then
-            SetBinding(key, action.bindingTarget)
+    for _, group in ipairs(GROUP_ORDER) do
+        for _, action in ipairs(group.actions) do
+            local key = db[group.dbKey].keybinds[action.key]
+            if key then
+                SetBinding(key, action.bindingTarget)
+            end
         end
     end
     pendingBindingApply = false
     return true
 end
 
-local function ClearKeyFromOtherActions(db, newKey, exceptActionKey)
-    for _, action in ipairs(ACTIONS) do
-        if action.key ~= exceptActionKey and db.worldMarkers.keybinds[action.key] == newKey then
-            db.worldMarkers.keybinds[action.key] = nil
-            if rowRefreshers[action.key] then rowRefreshers[action.key]() end
+-- A key can only drive one action, across both tabs.
+local function ClearKeyFromOtherActions(db, newKey, exceptAction)
+    for _, group in ipairs(GROUP_ORDER) do
+        for _, action in ipairs(group.actions) do
+            if action ~= exceptAction and db[group.dbKey].keybinds[action.key] == newKey then
+                db[group.dbKey].keybinds[action.key] = nil
+                if action.refresh then action.refresh() end
+            end
         end
     end
 end
 
-local function SetActionKey(db, action, newKey)
+local function SetActionKey(db, group, action, newKey)
     if InCombatLockdown() then
-        Util.Print("Can't change World Marker keybinds while in combat.")
+        Util.Print("Can't change marker keybinds while in combat.")
         return false
     end
-    local oldKey = db.worldMarkers.keybinds[action.key]
+    local keybinds = db[group.dbKey].keybinds
+    local oldKey = keybinds[action.key]
     if oldKey then
         SetBinding(oldKey)
     end
     if newKey then
-        ClearKeyFromOtherActions(db, newKey, action.key)
+        ClearKeyFromOtherActions(db, newKey, action)
         SetBinding(newKey, action.bindingTarget)
     end
-    db.worldMarkers.keybinds[action.key] = newKey
+    keybinds[action.key] = newKey
     return true
 end
 
@@ -220,47 +294,34 @@ function WorldMarkersModule:InitDB(db)
     -- out any SetBinding call made this early (during ADDON_LOADED).
 end
 
+function TargetMarkersModule:InitDB(db)
+    if not db.targetMarkers then db.targetMarkers = {} end
+    if not db.targetMarkers.keybinds then db.targetMarkers.keybinds = {} end
+
+    EnsureTargetButtons()
+end
+
 -- ---------------------------------------------------------------------------
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
-function WorldMarkersModule:BuildUI(parent, db)
-    local COL_NAME_X = 12
-    local ROW_HEIGHT = 26
+local COL_NAME_X = 12
+local ROW_HEIGHT = 26
 
+-- Section title, optional extra widgets (returns the next y), then the keybind rows.
+local function BuildKeybindTab(parent, db, group, title, extraWidgets)
     local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText("World Marker Keybinds")
+    sectionTitle:SetText(title)
     sectionTitle:SetTextColor(1, 0.82, 0)
 
-    local y = -36
-
-    local cbCursor = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbCursor:SetSize(24, 24)
-    cbCursor:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
-    cbCursor:SetChecked(db.worldMarkers.useCursor)
-    cbCursor:SetScript("OnClick", function(self)
-        local wanted = self:GetChecked()
-        if InCombatLockdown() then
-            self:SetChecked(not wanted)
-            Util.Print("Can't change World Marker mode while in combat.")
-            return
-        end
-        db.worldMarkers.useCursor = wanted
-        ApplyMarkerMode(wanted)
-    end)
-
-    local cursorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    cursorLabel:SetPoint("LEFT", cbCursor, "RIGHT", 6, 0)
-    cursorLabel:SetText("Place markers at cursor position instead of at your feet")
-
-    y = y - 30
+    local y = extraWidgets(-36)
 
     AR.UI.Divider(parent, y)
 
     y = y - 16
 
-    for _, action in ipairs(ACTIONS) do
+    for _, action in ipairs(group.actions) do
         if action.key == "clearAll" then
             y = y - 8
         end
@@ -276,16 +337,16 @@ function WorldMarkersModule:BuildUI(parent, db)
         bindBtn:SetPoint("LEFT", label, "RIGHT", 10, -1)
 
         local function Refresh()
-            bindBtn:SetText(db.worldMarkers.keybinds[action.key] or "Unbound")
+            bindBtn:SetText(db[group.dbKey].keybinds[action.key] or "Unbound")
         end
         Refresh()
-        rowRefreshers[action.key] = Refresh
+        action.refresh = Refresh
 
         bindBtn:SetScript("OnClick", function()
             bindBtn:SetText("Press a key...")
             StartKeyCapture(function(keyString)
                 if keyString then
-                    SetActionKey(db, action, keyString)
+                    SetActionKey(db, group, action, keyString)
                 end
                 Refresh()
             end)
@@ -296,7 +357,7 @@ function WorldMarkersModule:BuildUI(parent, db)
         clearBtn:SetPoint("LEFT", bindBtn, "RIGHT", 4, 0)
         clearBtn:SetText("x")
         clearBtn:SetScript("OnClick", function()
-            SetActionKey(db, action, nil)
+            SetActionKey(db, group, action, nil)
             Refresh()
         end)
 
@@ -308,6 +369,40 @@ function WorldMarkersModule:BuildUI(parent, db)
     end)
 end
 
+function WorldMarkersModule:BuildUI(parent, db)
+    BuildKeybindTab(parent, db, GROUPS.world, "World Marker Keybinds", function(y)
+        local cbCursor = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cbCursor:SetSize(24, 24)
+        cbCursor:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+        cbCursor:SetChecked(db.worldMarkers.useCursor)
+        cbCursor:SetScript("OnClick", function(self)
+            local wanted = self:GetChecked()
+            if InCombatLockdown() then
+                self:SetChecked(not wanted)
+                Util.Print("Can't change World Marker mode while in combat.")
+                return
+            end
+            db.worldMarkers.useCursor = wanted
+            ApplyMarkerMode(wanted)
+        end)
+
+        local cursorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        cursorLabel:SetPoint("LEFT", cbCursor, "RIGHT", 6, 0)
+        cursorLabel:SetText("Place markers at cursor position instead of at your feet")
+
+        return y - 30
+    end)
+end
+
+function TargetMarkersModule:BuildUI(parent, db)
+    BuildKeybindTab(parent, db, GROUPS.target, "Target Marker Keybinds", function(y)
+        local hint = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        hint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
+        hint:SetText("Marks your current target. Requires group leader or assist when grouped.")
+        return y - 22
+    end)
+end
+
 -- ---------------------------------------------------------------------------
 -- Events
 -- ---------------------------------------------------------------------------
@@ -316,7 +411,7 @@ local wmEvents = CreateFrame("Frame")
 wmEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
 wmEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 wmEvents:SetScript("OnEvent", function(_, event)
-    if not (AR.db and AR.db.worldMarkers) then return end
+    if not (AR.db and AR.db.worldMarkers and AR.db.targetMarkers) then return end
     if event == "PLAYER_ENTERING_WORLD" then
         ApplyAllBindings(AR.db)
     else -- PLAYER_REGEN_ENABLED: finish whatever combat lockdown blocked
@@ -325,4 +420,5 @@ wmEvents:SetScript("OnEvent", function(_, event)
     end
 end)
 
-AR:RegisterModule("Markers", WorldMarkersModule)
+AR:RegisterModule("World markers", WorldMarkersModule)
+AR:RegisterModule("Target markers", TargetMarkersModule)
