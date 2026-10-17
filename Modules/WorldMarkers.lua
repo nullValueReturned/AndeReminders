@@ -21,16 +21,24 @@ local TM_CLEAR_BUTTON_NAME = "AndeRemindersTMClear"
 --   1 Blue Square, 2 Green Triangle, 3 Purple Diamond, 4 Red Cross,
 --   5 Yellow Star, 6 Orange Circle, 7 Pale Blue Moon, 8 White Skull
 local WORLD_ACTIONS = {
-    { key = "star",     label = "Star (Yellow)",       index = 5 },
-    { key = "circle",   label = "Circle (Orange)",     index = 6 },
-    { key = "diamond",  label = "Diamond (Purple)",    index = 3 },
-    { key = "triangle", label = "Triangle (Green)",    index = 2 },
-    { key = "moon",     label = "Moon (Pale Blue)",    index = 7 },
-    { key = "square",   label = "Square (Blue)",       index = 1 },
-    { key = "cross",    label = "Cross (Red)",         index = 4 },
-    { key = "skull",    label = "Skull (White)",       index = 8 },
+    { key = "star",     label = "Star (Yellow)",       index = 5, icon = 1 },
+    { key = "circle",   label = "Circle (Orange)",     index = 6, icon = 2 },
+    { key = "diamond",  label = "Diamond (Purple)",    index = 3, icon = 3 },
+    { key = "triangle", label = "Triangle (Green)",    index = 2, icon = 4 },
+    { key = "moon",     label = "Moon (Pale Blue)",    index = 7, icon = 5 },
+    { key = "square",   label = "Square (Blue)",       index = 1, icon = 6 },
+    { key = "cross",    label = "Cross (Red)",         index = 4, icon = 7 },
+    { key = "skull",    label = "Skull (White)",       index = 8, icon = 8 },
     { key = "clearAll", label = "Clear All Markers" },
 }
+
+-- World markers share their shapes with the raid target icons, so reuse those
+-- textures (`icon` is the raid target icon number, not the /wm index).
+for _, action in ipairs(WORLD_ACTIONS) do
+    if action.icon then
+        action.label = "|TInterface\\TargetingFrame\\UI-RaidTargetingIcon_" .. action.icon .. ":16|t " .. action.label
+    end
+end
 
 -- Raid target icon indices (/tm N): 1 Star, 2 Circle, 3 Diamond, 4 Triangle,
 -- 5 Moon, 6 Square, 7 Cross, 8 Skull.
