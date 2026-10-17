@@ -153,15 +153,19 @@ function EnchantModule:BuildUI(parent, db)
 
     AR.UI.Title(parent, "Enchant Reminders", COL_NAME_X, -16)
 
-    local cbScreenLabel = AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify)
+    AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify)
+
+    local hThreshold = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hThreshold:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -84)
+    hThreshold:SetText("ITEM LEVEL")
 
     local cbGlobalIlvl = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbGlobalIlvl:SetPoint("LEFT", cbScreenLabel, "RIGHT", 28, 0)
+    cbGlobalIlvl:SetPoint("LEFT", hThreshold, "RIGHT", 12, 0)
     cbGlobalIlvl:SetChecked(db.enchants.globalIlvl.enabled)
 
     local cbGlobalIlvlLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     cbGlobalIlvlLabel:SetPoint("LEFT", cbGlobalIlvl, "RIGHT", 2, 0)
-    cbGlobalIlvlLabel:SetText("Global iLvl:")
+    cbGlobalIlvlLabel:SetText("Use one minimum for all slots:")
 
     local globalIlvlInput = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
     globalIlvlInput:SetSize(58, 24)
@@ -179,9 +183,9 @@ function EnchantModule:BuildUI(parent, db)
     globalIlvlInput:SetScript("OnEnterPressed", function(self) SaveGlobalIlvl(self) self:ClearFocus() end)
     globalIlvlInput:SetScript("OnEditFocusLost", SaveGlobalIlvl)
 
-    AR.UI.Divider(parent, -84, COL_NAME_X - 4)
+    AR.UI.Divider(parent, -116, COL_NAME_X - 4)
 
-    local HEADER_TOP = -96
+    local HEADER_TOP = -128
 
     local hSlot = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hSlot:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, HEADER_TOP)
@@ -193,7 +197,7 @@ function EnchantModule:BuildUI(parent, db)
 
     local hIlvl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hIlvl:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_LABEL_X, HEADER_TOP)
-    hIlvl:SetText("MINIMUM ITEM LEVEL")
+    hIlvl:SetText("MIN ITEM LEVEL (PER SLOT)")
 
     local SLOTS_TOP = HEADER_TOP - 22
     local slotEditBoxes = {}
