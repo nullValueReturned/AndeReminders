@@ -200,34 +200,31 @@ end)
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
+local CreateFrame = AR.UI.CreateFrame
+
 function EncounterModule:BuildUI(parent, db)
-    local COL_NAME_X = 12
+    local COL_NAME_X = 16
 
-    local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText("Encounter Utilities")
-    sectionTitle:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, "Encounter Utilities", COL_NAME_X, -16)
 
-    local y = -40
+    local y = -52
 
     local rowLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     rowLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-    rowLabel:SetText("Combat in/out text:")
-    rowLabel:SetTextColor(0.7, 0.7, 0.7)
+    rowLabel:SetText("COMBAT IN / OUT TEXT")
 
-    y = y - 22
+    y = y - 24
 
     -- Swatch bound to an { r, g, b } config table.
     local function ColorSwatchFor(cfg)
         return AR.UI.ColorSwatch(parent,
             function() return cfg.r, cfg.g, cfg.b end,
-            function(r, g, b) cfg.r, cfg.g, cfg.b = r, g, b end)
+            function(r, g, b) cfg.r, cfg.g, cfg.b = r, g, b end, 24)
     end
 
-    -- 1. Enable checkbox
+    -- 1. Enable toggle
     local cbEnable = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbEnable:SetSize(24, 24)
-    cbEnable:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+    cbEnable:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 2)
     cbEnable:SetChecked(db.encounter.combatText.enabled)
     cbEnable:SetScript("OnClick", function(self)
         db.encounter.combatText.enabled = self:GetChecked()
@@ -239,28 +236,28 @@ function EncounterModule:BuildUI(parent, db)
 
     -- 2. Enter combat color
     local enterLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    enterLabel:SetPoint("LEFT", enableLabel, "RIGHT", 16, 0)
-    enterLabel:SetText("+Combat:")
+    enterLabel:SetPoint("LEFT", enableLabel, "RIGHT", 24, 0)
+    enterLabel:SetText("+Combat")
 
     local enterSwatch = ColorSwatchFor(db.encounter.enterText)
-    enterSwatch:SetPoint("LEFT", enterLabel, "RIGHT", 6, 0)
+    enterSwatch:SetPoint("LEFT", enterLabel, "RIGHT", 8, 0)
 
     -- 3. Leave combat color
     local leaveLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    leaveLabel:SetPoint("LEFT", enterSwatch, "RIGHT", 12, 0)
-    leaveLabel:SetText("-Combat:")
+    leaveLabel:SetPoint("LEFT", enterSwatch, "RIGHT", 20, 0)
+    leaveLabel:SetText("-Combat")
 
     local leaveSwatch = ColorSwatchFor(db.encounter.leaveText)
-    leaveSwatch:SetPoint("LEFT", leaveLabel, "RIGHT", 6, 0)
+    leaveSwatch:SetPoint("LEFT", leaveLabel, "RIGHT", 8, 0)
 
     -- 4. Shared font size
     local sizeLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sizeLabel:SetPoint("LEFT", leaveSwatch, "RIGHT", 14, 0)
-    sizeLabel:SetText("Size:")
+    sizeLabel:SetPoint("LEFT", leaveSwatch, "RIGHT", 24, 0)
+    sizeLabel:SetText("Size")
 
     local sizeInput = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    sizeInput:SetSize(40, 20)
-    sizeInput:SetPoint("LEFT", sizeLabel, "RIGHT", 6, -1)
+    sizeInput:SetSize(48, 24)
+    sizeInput:SetPoint("LEFT", sizeLabel, "RIGHT", 8, 0)
     sizeInput:SetAutoFocus(false)
     sizeInput:SetNumeric(true)
     sizeInput:SetMaxLetters(3)
@@ -277,31 +274,29 @@ function EncounterModule:BuildUI(parent, db)
 
     -- 5. Font dropdown (shared)
     local fontLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    fontLabel:SetPoint("LEFT", sizeInput, "RIGHT", 14, 1)
-    fontLabel:SetText("Font:")
+    fontLabel:SetPoint("LEFT", sizeInput, "RIGHT", 24, 0)
+    fontLabel:SetText("Font")
 
     local fontDropdown = AR.UI.Dropdown(parent, 180, Fonts.List(),
         function() return db.encounter.combatText.fontName end,
         function(name) db.encounter.combatText.fontName = name end,
         { kind = "font", maxHeight = 300 })
-    fontDropdown:SetPoint("LEFT", fontLabel, "RIGHT", 6, 0)
+    fontDropdown:SetPoint("LEFT", fontLabel, "RIGHT", 8, 0)
 
-    y = y - 36
+    y = y - 44
 
-    AR.UI.Divider(parent, y)
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
 
-    y = y - 14
+    y = y - 20
 
-    local mfHeader = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    local mfHeader = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     mfHeader:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-    mfHeader:SetText("Midnight Falls (Encounter 3183):")
-    mfHeader:SetTextColor(0.9, 0.9, 0.9)
+    mfHeader:SetText("MIDNIGHT FALLS  (ENCOUNTER 3183)")
 
-    y = y - 24
+    y = y - 30
 
     local cbParticles = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbParticles:SetSize(24, 24)
-    cbParticles:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 18, y + 3)
+    cbParticles:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
     cbParticles:SetChecked(db.encounter.midnightFalls.particleDensity)
     cbParticles:SetScript("OnClick", function(self)
         db.encounter.midnightFalls.particleDensity = self:GetChecked()
@@ -311,11 +306,10 @@ function EncounterModule:BuildUI(parent, db)
     cbParticlesLabel:SetPoint("LEFT", cbParticles, "RIGHT", 6, 0)
     cbParticlesLabel:SetText("Disable particle density during encounter (restores after)")
 
-    y = y - 24
+    y = y - 34
 
     local cbTextures = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbTextures:SetSize(24, 24)
-    cbTextures:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 18, y + 3)
+    cbTextures:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
     cbTextures:SetChecked(db.encounter.midnightFalls.projectedTextures)
     cbTextures:SetScript("OnClick", function(self)
         db.encounter.midnightFalls.projectedTextures = self:GetChecked()

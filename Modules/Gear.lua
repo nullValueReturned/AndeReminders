@@ -356,27 +356,25 @@ end)
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
+local CreateFrame = AR.UI.CreateFrame
+
 function GearModule:BuildUI(parent, db)
-    local X       = 12
-    local ROW_H   = 28
-    local CHECK_X = 12
+    local X       = 16
+    local ROW_H   = 34
+    local CHECK_X = 14
 
-    local title = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", parent, "TOPLEFT", X, -10)
-    title:SetText("Gear Reminders")
-    title:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, "Gear Reminders", X, -16)
 
-    AR.UI.NotifyRow(parent, X, -36, db.gear.notify)
-    AR.UI.Divider(parent, -60)
+    AR.UI.NotifyRow(parent, X, -48, db.gear.notify)
+    AR.UI.Divider(parent, -80, X - 4)
 
-    local ROWS_TOP = -70
+    local ROWS_TOP = -96
 
-    -- Checkbox + label bound to db.gear.checks[key] (onChange runs after a click);
+    -- Toggle + label bound to db.gear.checks[key] (onChange runs after a click);
     -- returns the label for chaining.
     local function AddCheck(y, key, text, onChange)
         local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        cb:SetSize(22, 22)
-        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, y)
+        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", CHECK_X, y + 4)
         cb:SetChecked(db.gear.checks[key])
         cb:SetScript("OnClick", function(self)
             db.gear.checks[key] = self:GetChecked()
@@ -389,13 +387,14 @@ function GearModule:BuildUI(parent, db)
         return label
     end
 
-    AddCheck(ROWS_TOP,             "weaponType", "Wrong weapon type for spec (2H / 1H / shield)")
-    AddCheck(ROWS_TOP - ROW_H,     "weaponStat", "Wrong main stat on weapon (STR / AGI / INT)")
-    local lIL = AddCheck(ROWS_TOP - ROW_H * 2, "lowIlvl", "Item level below")
+    local function Stripe(y, i) AR.UI.RowStripe(parent, y + 6, ROW_H, i, X - 4) end
+    Stripe(ROWS_TOP, 1);             AddCheck(ROWS_TOP,             "weaponType", "Wrong weapon type for spec (2H / 1H / shield)")
+    Stripe(ROWS_TOP - ROW_H, 2);     AddCheck(ROWS_TOP - ROW_H,     "weaponStat", "Wrong main stat on weapon (STR / AGI / INT)")
+    Stripe(ROWS_TOP - ROW_H * 2, 1); local lIL = AddCheck(ROWS_TOP - ROW_H * 2, "lowIlvl", "Item level below")
 
     local ilvlBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    ilvlBox:SetSize(52, 20)
-    ilvlBox:SetPoint("LEFT", lIL, "RIGHT", 8, 0)
+    ilvlBox:SetSize(56, 24)
+    ilvlBox:SetPoint("LEFT", lIL, "RIGHT", 10, 0)
     ilvlBox:SetAutoFocus(false)
     ilvlBox:SetNumeric(true)
     ilvlBox:SetMaxLetters(4)
@@ -409,27 +408,28 @@ function GearModule:BuildUI(parent, db)
     ilvlBox:SetScript("OnEnterPressed", function(self) SaveThreshold(self) self:ClearFocus() end)
     ilvlBox:SetScript("OnEditFocusLost", SaveThreshold)
 
-    local lILunit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lILunit:SetPoint("LEFT", ilvlBox, "RIGHT", 4, 0)
+    local lILunit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lILunit:SetPoint("LEFT", ilvlBox, "RIGHT", 8, 0)
     lILunit:SetText("ilvl  (ignores shirt & tabard)")
-    lILunit:SetTextColor(0.65, 0.65, 0.65)
 
     local note = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    note:SetPoint("TOPLEFT", parent, "TOPLEFT", X, ROWS_TOP - ROW_H * 3 - 10)
-    note:SetText("Note: trinket stat checking is not supported — too many trinkets carry no primary stat.")
-    note:SetTextColor(0.45, 0.45, 0.45)
-    note:SetWidth(450)
+    note:SetPoint("TOPLEFT", parent, "TOPLEFT", X, ROWS_TOP - ROW_H * 3 - 8)
+    note:SetText("Trinket stat checking is not supported: too many trinkets carry no primary stat.")
+    note:SetTextColor(1, 1, 1, 0.35)
+    note:SetWidth(520)
     note:SetWordWrap(true)
     note:SetJustifyH("LEFT")
 
-    AR.UI.Divider(parent, ROWS_TOP - ROW_H * 3 - 54)
+    AR.UI.Divider(parent, ROWS_TOP - ROW_H * 3 - 40, X - 4)
 
-    local lDur = AddCheck(ROWS_TOP - ROW_H * 3 - 68, "lowDurability", "Low durability warning below",
+    local DUR_TOP = ROWS_TOP - ROW_H * 3 - 56
+    Stripe(DUR_TOP, 1)
+    local lDur = AddCheck(DUR_TOP, "lowDurability", "Low durability warning below",
         function() GearModule:RunDurabilityCheck() end)
 
     local durBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    durBox:SetSize(40, 20)
-    durBox:SetPoint("LEFT", lDur, "RIGHT", 8, 0)
+    durBox:SetSize(48, 24)
+    durBox:SetPoint("LEFT", lDur, "RIGHT", 10, 0)
     durBox:SetAutoFocus(false)
     durBox:SetNumeric(true)
     durBox:SetMaxLetters(3)
@@ -445,12 +445,12 @@ function GearModule:BuildUI(parent, db)
     durBox:SetScript("OnEnterPressed", function(self) SaveDurability(self) self:ClearFocus() end)
     durBox:SetScript("OnEditFocusLost", SaveDurability)
 
-    local lDurUnit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    lDurUnit:SetPoint("LEFT", durBox, "RIGHT", 4, 0)
+    local lDurUnit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    lDurUnit:SetPoint("LEFT", durBox, "RIGHT", 8, 0)
     lDurUnit:SetText("%  (persists until repaired)")
-    lDurUnit:SetTextColor(0.65, 0.65, 0.65)
 
-    AddCheck(ROWS_TOP - ROW_H * 4 - 68, "cloakGlider",   "Missing Goblin Glider cloak tinker (Engineering)")
+    Stripe(DUR_TOP - ROW_H, 2)
+    AddCheck(DUR_TOP - ROW_H, "cloakGlider", "Missing Goblin Glider cloak tinker (Engineering)")
 end
 
 AR:RegisterModule("Gear", GearModule)

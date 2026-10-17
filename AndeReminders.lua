@@ -27,6 +27,10 @@ function AR:InitDB()
     if not AndeRemindersDB then AndeRemindersDB = {} end
     AR.db = AndeRemindersDB
     if not AR.db.anchors then AR.db.anchors = {} end
+    if not AR.db.accent then
+        AR.db.accent = { r = AR.UI.accent.r, g = AR.UI.accent.g, b = AR.UI.accent.b }
+    end
+    AR.UI.SetAccent(AR.db.accent.r, AR.db.accent.g, AR.db.accent.b)
     for _, def in ipairs(ANCHOR_DEFS) do
         if not AR.db.anchors[def.name] then
             AR.db.anchors[def.name] = { x = def.x, y = def.y }
@@ -66,25 +70,25 @@ function AR:CreateAnchors()
         local x = (saved and saved.x) or def.x
         local y = (saved and saved.y) or def.y
 
-        local f = CreateFrame("Frame", "AndeRemindersAnchor_" .. def.name, UIParent, "BackdropTemplate")
+        local f = AR.UI.CreateFrame("Frame", "AndeRemindersAnchor_" .. def.name, UIParent)
         f:SetSize(def.w, def.h)
         f:SetPoint("CENTER", UIParent, "CENTER", x, y)
         f:SetMovable(true)
         f:SetClampedToScreen(true)
         f:RegisterForDrag("LeftButton")
         f:SetFrameStrata("HIGH")
-        f:SetBackdrop({
-            bgFile   = "Interface/Buttons/WHITE8x8",
-            edgeFile = "Interface/Buttons/WHITE8x8",
-            edgeSize = 1,
-        })
-        f:SetBackdropColor(0.1, 0.4, 0.8, 0.4)
-        f:SetBackdropBorderColor(0.4, 0.8, 1, 0.9)
+        AR.UI.Surface(f, { 0, 0, 0, 0.55 }, { 1, 1, 1, 1 })
+
+        local tint = f:CreateTexture(nil, "BACKGROUND", nil, 1)
+        tint:SetAllPoints()
+        AR.UI.OnAccent(function(r, g, b)
+            f.arBorder:SetColor(r, g, b, 0.95)
+            tint:SetColorTexture(r, g, b, 0.16)
+        end)
 
         local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lbl:SetPoint("CENTER", f, "CENTER", 0, 0)
         lbl:SetText(def.label)
-        lbl:SetTextColor(1, 1, 1, 1)
 
         f:SetScript("OnDragStart", f.StartMoving)
         f:SetScript("OnDragStop", function(self)
@@ -126,28 +130,70 @@ end
 local settingsFrame
 local activeTabIndex = 0
 
+local WINDOW_W, WINDOW_H = 1120, 660
+local SIDEBAR_W          = 176
+local TOPBAR_H           = 46
+local NAV_H              = 34
+
 local function SelectTab(index)
     activeTabIndex = index
     for i, entry in ipairs(AR.registeredModules) do
         if entry.contentFrame then
-            if i == index then
-                entry.contentFrame:Show()
-                entry.tabButton:SetBackdropColor(0.18, 0.38, 0.72, 0.92)
-                entry.tabButton:SetBackdropBorderColor(0.55, 0.65, 0.92, 0.95)
-            else
-                entry.contentFrame:Hide()
-                entry.tabButton:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
-                entry.tabButton:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
-            end
+            entry.contentFrame:SetShown(i == index)
+            entry.navAnim:To(i == index and 1 or 0)
         end
     end
+    local entry = AR.registeredModules[index]
+    if entry and settingsFrame then settingsFrame.crumb:SetText(entry.name) end
+end
+
+-- One sidebar entry: hover wash, accent bar that grows in on the active tab, dimmed label.
+local function CreateNavItem(parent, entry, index, y)
+    local UI = AR.UI
+    local item = UI.CreateFrame("Button", nil, parent)
+    item:SetHeight(NAV_H)
+    item:SetPoint("TOPLEFT",  parent, "TOPLEFT",  0, y)
+    item:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, y)
+
+    local wash = item:CreateTexture(nil, "BACKGROUND")
+    wash:SetAllPoints()
+
+    local bar = item:CreateTexture(nil, "ARTWORK")
+    bar:SetPoint("LEFT", item, "LEFT", 0, 0)
+    bar:SetWidth(3)
+
+    local label = item:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    label:SetPoint("LEFT", item, "LEFT", 18, 0)
+    label:SetText(entry.name)
+
+    local hover = 0
+    local active
+
+    local function Paint()
+        local a = active.value
+        wash:SetColorTexture(UI.accent.r, UI.accent.g, UI.accent.b, 0.11 * a + 0.045 * hover * (1 - a))
+        bar:SetColorTexture(UI.accent.r, UI.accent.g, UI.accent.b, 1)
+        bar:SetHeight(math.max(0.01, (NAV_H - 14) * a))
+        label:SetTextColor(1, 1, 1, 0.55 + 0.45 * math.max(a, hover))
+        label:SetPoint("LEFT", item, "LEFT", 18 + 3 * a, 0)
+    end
+    active = UI.NewAnim(Paint, 16)
+    UI.OnAccent(Paint)
+    entry.navAnim = active
+
+    item:SetScript("OnEnter", function() hover = 1; Paint() end)
+    item:SetScript("OnLeave", function() hover = 0; Paint() end)
+    item:SetScript("OnClick", function() SelectTab(index) end)
+    return item
 end
 
 function AR:CreateSettingsWindow()
     if settingsFrame then return settingsFrame end
+    local UI = AR.UI
+    local C  = UI.Colors
 
-    local f = CreateFrame("Frame", "AndeRemindersSettings", UIParent, "BackdropTemplate")
-    f:SetSize(960, 580)
+    local f = UI.CreateFrame("Frame", "AndeRemindersSettings", UIParent)
+    f:SetSize(WINDOW_W, WINDOW_H)
     f:SetPoint("CENTER")
     f:SetMovable(true)
     f:SetClampedToScreen(true)
@@ -156,98 +202,107 @@ function AR:CreateSettingsWindow()
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop", f.StopMovingOrSizing)
     f:SetFrameStrata("DIALOG")
-    f:SetBackdrop({
-        bgFile = "Interface/DialogFrame/UI-DialogBox-Background",
-        tile = true, tileSize = 32,
-    })
+    UI.Surface(f, C.window, C.border)
     f:Hide()
     tinsert(UISpecialFrames, "AndeRemindersSettings")  -- Escape closes the window
+    UI.FadeInOnShow(f)
 
-    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", f, "TOP", 0, -14)
-    title:SetText("AndeReminders")
+    -- Accent wash fading down from the top edge.
+    local wash = f:CreateTexture(nil, "BACKGROUND", nil, 1)
+    wash:SetPoint("TOPLEFT",  f, "TOPLEFT",  SIDEBAR_W, 0)
+    wash:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, 0)
+    wash:SetHeight(180)
+    UI.OnAccent(function(r, g, b)
+        wash:SetColorTexture(r, g, b, 1)
+        wash:SetGradient("VERTICAL", CreateColor(r, g, b, 0), CreateColor(r, g, b, 0.07))
+    end)
 
-    local closeBtn = CreateFrame("Button", nil, f, "UIPanelCloseButton")
-    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
-    closeBtn:SetScript("OnClick", function() f:Hide() end)
+    -- Sidebar ---------------------------------------------------------------
+    local side = UI.CreateFrame("Frame", nil, f)
+    side:SetPoint("TOPLEFT",    f, "TOPLEFT",    0, 0)
+    side:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 0, 0)
+    side:SetWidth(SIDEBAR_W)
+    local sideBg = side:CreateTexture(nil, "BACKGROUND", nil, 2)
+    sideBg:SetAllPoints()
+    sideBg:SetColorTexture(unpack(C.side))
+    local sideEdge = side:CreateTexture(nil, "BORDER")
+    sideEdge:SetPoint("TOPRIGHT"); sideEdge:SetPoint("BOTTOMRIGHT"); sideEdge:SetWidth(1)
+    sideEdge:SetColorTexture(unpack(C.border))
 
-    local titleDiv = f:CreateTexture(nil, "ARTWORK")
-    titleDiv:SetColorTexture(0.4, 0.45, 0.55, 0.7)
-    titleDiv:SetHeight(1)
-    titleDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -37)
-    titleDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -37)
+    local logo = side:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    logo:SetPoint("TOPLEFT", side, "TOPLEFT", 18, -20)
+    UI.OnAccent(function(r, g, b)
+        logo:SetText("Ande|cff" .. UI.Hex(r, g, b) .. "Reminders|r")
+    end)
+    logo:SetTextColor(1, 1, 1, 1)
 
-    -- Toggle Anchors button at the bottom of the window
-    local btn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-    btn:SetSize(150, 24)
-    btn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 14, 12)
-    btn:SetText(AR.anchorsShown and "Hide Anchors" or "Toggle Anchors")
+    local version = C_AddOns and C_AddOns.GetAddOnMetadata and C_AddOns.GetAddOnMetadata("AndeReminders", "Version")
+    local sub = side:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sub:SetPoint("TOPLEFT", logo, "BOTTOMLEFT", 0, -3)
+    sub:SetText(version and ("v" .. version) or "")
+
+    local navTop = -78
+    local navDiv = UI.Divider(side, navTop + 10, 18)
+
+    for i, entry in ipairs(AR.registeredModules) do
+        CreateNavItem(side, entry, i, navTop - (i - 1) * NAV_H - 4)
+    end
+
+    -- Sidebar footer: accent picker and the anchors toggle.
+    local btn = UI.Button(side, AR.anchorsShown and "Hide Anchors" or "Toggle Anchors", SIDEBAR_W - 36, 28)
+    btn:SetPoint("BOTTOMLEFT", side, "BOTTOMLEFT", 18, 18)
     btn:SetScript("OnClick", function() AR:ToggleAnchors() end)
     toggleAnchorsBtn = btn
 
-    local tabX      = 14
-    local TAB_Y     = -40
-    local CONTENT_Y = TAB_Y - 28
+    local accentLabel = side:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    accentLabel:SetPoint("BOTTOMLEFT", btn, "TOPLEFT", 0, 20)
+    accentLabel:SetText("ACCENT")
+    local swatch = UI.ColorSwatch(side,
+        function() return UI.accent.r, UI.accent.g, UI.accent.b end,
+        function(r, g, b)
+            AR.db.accent.r, AR.db.accent.g, AR.db.accent.b = r, g, b
+            UI.SetAccent(r, g, b)
+        end, 20)
+    swatch:SetPoint("LEFT", accentLabel, "RIGHT", 10, 0)
 
-    for i, entry in ipairs(AR.registeredModules) do
-        local tab = CreateFrame("Button", nil, f, "BackdropTemplate")
-        tab:SetSize(100, 24)
-        tab:SetPoint("TOPLEFT", f, "TOPLEFT", tabX, TAB_Y)
-        tab:SetBackdrop({
-            bgFile   = "Interface/Buttons/WHITE8x8",
-            edgeFile = "Interface/Buttons/WHITE8x8",
-            edgeSize = 1,
-        })
-        tab:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
-        tab:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
+    -- Top bar ---------------------------------------------------------------
+    local crumbRoot = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    crumbRoot:SetPoint("TOPLEFT", f, "TOPLEFT", SIDEBAR_W + 22, -17)
+    crumbRoot:SetText("SETTINGS  /")
+    local crumb = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    crumb:SetPoint("LEFT", crumbRoot, "RIGHT", 8, 0)
+    f.crumb = crumb
 
-        local tabText = tab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        tabText:SetAllPoints(tab)
-        tabText:SetJustifyH("CENTER")
-        tabText:SetText(entry.name)
+    local closeBtn = UI.CreateFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -9)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
 
-        entry.tabButton = tab
-        tabX = tabX + 104
+    local topDiv = f:CreateTexture(nil, "ARTWORK")
+    topDiv:SetHeight(1)
+    topDiv:SetColorTexture(unpack(C.border))
+    topDiv:SetPoint("TOPLEFT",  f, "TOPLEFT",  SIDEBAR_W, -TOPBAR_H)
+    topDiv:SetPoint("TOPRIGHT", f, "TOPRIGHT", 0, -TOPBAR_H)
 
-        local content = CreateFrame("Frame", nil, f, "BackdropTemplate")
-        content:SetPoint("TOPLEFT",     f, "TOPLEFT",     14, CONTENT_Y)
-        content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 44)  -- 44px gap for toggle button
-        content:SetBackdrop({
-            bgFile   = "Interface/Buttons/WHITE8x8",
-            edgeFile = "Interface/Buttons/WHITE8x8",
-            edgeSize = 1,
-        })
-        content:SetBackdropColor(0.08, 0.10, 0.16, 0.85)
-        content:SetBackdropBorderColor(0.30, 0.33, 0.42, 0.92)
+    -- Pages -----------------------------------------------------------------
+    for _, entry in ipairs(AR.registeredModules) do
+        local content = UI.CreateFrame("Frame", nil, f)
+        content:SetPoint("TOPLEFT",     f, "TOPLEFT",     SIDEBAR_W + 1, -(TOPBAR_H + 1))
+        content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -1, 1)
         content:Hide()
-
         entry.contentFrame = content
 
         if entry.module.BuildUI then
             Guarded(function() entry.module:BuildUI(content, AR.db) end)
         end
-
-        local tabIndex = i
-        tab:SetScript("OnEnter", function(self)
-            if activeTabIndex ~= tabIndex then
-                self:SetBackdropColor(0.12, 0.22, 0.50, 0.92)
-            end
-        end)
-        tab:SetScript("OnLeave", function(self)
-            if activeTabIndex ~= tabIndex then
-                self:SetBackdropColor(0.10, 0.12, 0.18, 0.92)
-            end
-        end)
-        tab:SetScript("OnClick", function()
-            SelectTab(tabIndex)
-        end)
-    end
-
-    if #AR.registeredModules > 0 then
-        SelectTab(1)
     end
 
     settingsFrame = f
+
+    if #AR.registeredModules > 0 then
+        SelectTab(1)
+        for _, entry in ipairs(AR.registeredModules) do entry.navAnim:To(entry == AR.registeredModules[1] and 1 or 0, true) end
+    end
+
     return f
 end
 

@@ -1,2 +1,7 @@
 .vscode/settings.json
 CLAUDE.md
+
+# Node tooling (stray npm install)
+node_modules/
+package.json
+package-lock.json

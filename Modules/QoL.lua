@@ -143,19 +143,17 @@ end
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
+local CreateFrame = AR.UI.CreateFrame
+
 function QoLModule:BuildUI(parent, db)
-    local COL_NAME_X = 12
+    local COL_NAME_X = 16
 
-    local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText("Quality of Life")
-    sectionTitle:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, "Quality of Life", COL_NAME_X, -16)
 
-    local y = -36
+    local y = -52
 
     local cbVault = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbVault:SetSize(24, 24)
-    cbVault:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+    cbVault:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
     cbVault:SetChecked(not db.qol.greatVault.hide)
     cbVault:SetScript("OnClick", function(self)
         local show = self:GetChecked()
@@ -169,22 +167,20 @@ function QoLModule:BuildUI(parent, db)
     vaultLabel:SetPoint("LEFT", cbVault, "RIGHT", 6, 0)
     vaultLabel:SetText("Show Great Vault minimap button")
 
-    y = y - 20
+    y = y - 26
 
     local vaultNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    vaultNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 30, y)
+    vaultNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y)
     vaultNote:SetText("Drag the button around the minimap to reposition.")
-    vaultNote:SetTextColor(0.5, 0.5, 0.5)
 
-    y = y - 28
+    y = y - 30
 
-    AR.UI.Divider(parent, y)
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
 
-    y = y - 14
+    y = y - 22
 
     local cbLFG = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbLFG:SetSize(24, 24)
-    cbLFG:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+    cbLFG:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
     cbLFG:SetChecked(db.qol.autoAcceptLFG.enabled)
     cbLFG:SetScript("OnClick", function(self)
         db.qol.autoAcceptLFG.enabled = self:GetChecked()
@@ -194,12 +190,11 @@ function QoLModule:BuildUI(parent, db)
     lfgLabel:SetPoint("LEFT", cbLFG, "RIGHT", 6, 0)
     lfgLabel:SetText("Auto-accept LFG role checks")
 
-    y = y - 20
+    y = y - 26
 
     local lfgNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    lfgNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 30, y)
+    lfgNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y)
     lfgNote:SetText("Uses your currently assigned role, or your spec role if none assigned.")
-    lfgNote:SetTextColor(0.5, 0.5, 0.5)
 end
 
 -- ---------------------------------------------------------------------------

@@ -1008,6 +1008,8 @@ end
 -- Settings UI helpers
 -- =============================================================================
 
+local CreateFrame = AR.UI.CreateFrame
+
 -- Color swatch whose alpha is stored separately; only r/g/b are picked here.
 local function Swatch(parent, getR, getG, getB, getA, setColor)
     return AR.UI.ColorSwatch(parent,
@@ -1023,7 +1025,7 @@ end
 
 local function MakeEB(parent, x, y, w, numeric)
     local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    eb:SetSize(w, 20); eb:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    eb:SetSize(w, 22); eb:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
     eb:SetAutoFocus(false)
     if numeric then eb:SetNumeric(true) end
     return eb
@@ -1064,13 +1066,7 @@ local function BuildIconPicker()
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
-    f:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
-        edgeSize = 24, tile = true, tileSize = 32,
-        insets   = { left=6, right=6, top=6, bottom=6 },
-    })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+    AR.UI.Surface(f, AR.UI.Colors.window, AR.UI.Colors.border)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", f, "TOP", 0, -14); title:SetText("Choose Icon")
@@ -1097,12 +1093,12 @@ local function BuildIconPicker()
 
     -- Scrollbar
     local sb = CreateFrame("Slider", nil, f)
-    sb:SetOrientation("VERTICAL"); sb:SetWidth(16)
+    sb:SetOrientation("VERTICAL"); sb:SetWidth(6)
     sb:SetPoint("TOPRIGHT",    f, "TOPRIGHT",    -6, -70)
     sb:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -6,   8)
-    local sbBg = sb:CreateTexture(nil, "BACKGROUND"); sbBg:SetAllPoints(); sbBg:SetColorTexture(0,0,0,0.3)
+    local sbBg = sb:CreateTexture(nil, "BACKGROUND"); sbBg:SetAllPoints(); sbBg:SetColorTexture(1,1,1,0.05)
     local sbTh = sb:CreateTexture(nil, "OVERLAY")
-    sbTh:SetTexture("Interface/Buttons/UI-ScrollBar-Knob"); sbTh:SetSize(16,16)
+    sbTh:SetSize(6,48); AR.UI.OnAccent(function(r,g,b) sbTh:SetColorTexture(r,g,b,0.6) end)
     sb:SetThumbTexture(sbTh); sb:SetMinMaxValues(0,0); sb:SetValue(0)
 
     -- Button pool (only visible rows are positioned + shown)
@@ -1248,13 +1244,7 @@ local function BuildCopyDialog(titleText)
     f:RegisterForDrag("LeftButton")
     f:SetScript("OnDragStart", f.StartMoving)
     f:SetScript("OnDragStop",  f.StopMovingOrSizing)
-    f:SetBackdrop({
-        bgFile   = "Interface/DialogFrame/UI-DialogBox-Background",
-        edgeFile = "Interface/DialogFrame/UI-DialogBox-Border",
-        edgeSize = 24, tile = true, tileSize = 32,
-        insets   = { left=6, right=6, top=6, bottom=6 },
-    })
-    f:SetBackdropColor(0.05, 0.05, 0.05, 0.97)
+    AR.UI.Surface(f, AR.UI.Colors.window, AR.UI.Colors.border)
 
     local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", f, "TOP", 0, -14); title:SetText(titleText)
@@ -1346,7 +1336,7 @@ function BossModModule:BuildUI(parent, db)
     -- Sidebar
     -- -------------------------------------------------------------------------
     local sbBg = parent:CreateTexture(nil, "BACKGROUND")
-    sbBg:SetColorTexture(0.05, 0.05, 0.05, 1)
+    sbBg:SetColorTexture(0.032, 0.035, 0.044, 1)
     sbBg:SetPoint("TOPLEFT", parent, "TOPLEFT")
     sbBg:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT")
     sbBg:SetWidth(SB_W)
@@ -1379,7 +1369,7 @@ function BossModModule:BuildUI(parent, db)
 
     -- Separator
     local sep = parent:CreateTexture(nil, "ARTWORK")
-    sep:SetColorTexture(0.3, 0.3, 0.3, 1); sep:SetWidth(1)
+    sep:SetColorTexture(1, 1, 1, 0.07); sep:SetWidth(1)
     sep:SetPoint("TOPLEFT",    parent, "TOPLEFT",    SB_W, 0)
     sep:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", SB_W, 0)
 
@@ -1415,13 +1405,13 @@ function BossModModule:BuildUI(parent, db)
             tb:SetSize(480, 40)
             tb:SetPoint("TOP", typePicker, "TOP", 0, -40 - (i-1) * 50)
             tb:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
-            tb:SetBackdropColor(0.1, 0.18, 0.4, 1); tb:SetBackdropBorderColor(0.35, 0.55, 1, 1)
+            tb:SetBackdropColor(0.095, 0.10, 0.118, 1); tb:SetBackdropBorderColor(1, 1, 1, 0.1)
             local tl = tb:CreateFontString(nil,"OVERLAY","GameFontNormal")
             tl:SetPoint("LEFT", tb, "LEFT", 14, 0); tl:SetText(t.label)
             local td = tb:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
             td:SetPoint("LEFT", tl, "RIGHT", 10, 0); td:SetText("— " .. t.desc); td:SetTextColor(0.7,0.7,0.7)
-            tb:SetScript("OnEnter", function(s) s:SetBackdropColor(0.15,0.28,0.6,1) end)
-            tb:SetScript("OnLeave", function(s) s:SetBackdropColor(0.1,0.18,0.4,1) end)
+            tb:SetScript("OnEnter", function(s) s:SetBackdropColor(0.14, 0.15, 0.18, 1); s:SetBackdropBorderColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b, 0.9) end)
+            tb:SetScript("OnLeave", function(s) s:SetBackdropColor(0.095, 0.10, 0.118, 1); s:SetBackdropBorderColor(1, 1, 1, 0.1) end)
             local et = t.typ
             tb:SetScript("OnClick", function()
                 local e = NewEntry(et)
@@ -1461,7 +1451,9 @@ function BossModModule:BuildUI(parent, db)
         activeSub = idx
         for i = 1, #subBtns do
             subConts[i]:SetShown(i == idx)
-            subBtns[i]:SetBackdropColor(i==idx and 0.12 or 0.05, i==idx and 0.26 or 0.05, i==idx and 0.6 or 0.05, 1)
+            local on, ac = i == idx, AR.UI.accent
+            subBtns[i]:SetBackdropColor(on and ac.r * 0.25 or 0.06, on and ac.g * 0.25 or 0.065, on and ac.b * 0.25 or 0.078, 1)
+            subBtns[i]:SetBackdropBorderColor(on and ac.r or 1, on and ac.g or 1, on and ac.b or 1, on and 0.85 or 0.1)
         end
     end
 
@@ -1471,11 +1463,11 @@ function BossModModule:BuildUI(parent, db)
         local bt = CreateFrame("Button", nil, sp, "BackdropTemplate")
         bt:SetSize(82, 22); bt:SetPoint("TOPLEFT", sp, "TOPLEFT", (i-1)*86 + 4, -36)
         bt:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
-        bt:SetBackdropColor(0.05, 0.05, 0.05, 1); bt:SetBackdropBorderColor(0.25, 0.25, 0.25, 1)
+        bt:SetBackdropColor(0.06, 0.065, 0.078, 1); bt:SetBackdropBorderColor(1, 1, 1, 0.1)
         local bfs = bt:CreateFontString(nil,"OVERLAY","GameFontNormal"); bfs:SetAllPoints(); bfs:SetJustifyH("CENTER"); bfs:SetText(n)
         local ii = i
-        bt:SetScript("OnEnter", function(s) if activeSub ~= ii then s:SetBackdropColor(0.09,0.12,0.28,1) end end)
-        bt:SetScript("OnLeave", function(s) if activeSub ~= ii then s:SetBackdropColor(0.05,0.05,0.05,1) end end)
+        bt:SetScript("OnEnter", function(s) if activeSub ~= ii then s:SetBackdropColor(0.12, 0.13, 0.16, 1) end end)
+        bt:SetScript("OnLeave", function(s) if activeSub ~= ii then s:SetBackdropColor(0.06, 0.065, 0.078, 1) end end)
         bt:SetScript("OnClick", function() PickSub(ii) end)
         subBtns[i] = bt
 
@@ -1507,9 +1499,9 @@ function BossModModule:BuildUI(parent, db)
     -- Context menu frames (created once, reused)
     -- =============================================
     local CTX_W, CTX_ITEM_H = 200, 22
-    local ctxBD = { bgFile="Interface/DialogFrame/UI-DialogBox-Background",
+    local ctxBD = { bgFile="Interface/Buttons/WHITE8x8",
         edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1,
-        tile=true, tileSize=32, insets={left=2,right=2,top=2,bottom=2} }
+        insets={left=1,right=1,top=1,bottom=1} }
 
     -- Transparent full-screen capture frame — closes menus on outside click
     local ctxCapture = CreateFrame("Frame", nil, UIParent)
@@ -1519,14 +1511,14 @@ function BossModModule:BuildUI(parent, db)
     local ctxMenu = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     ctxMenu:SetFrameStrata("FULLSCREEN_DIALOG"); ctxMenu:SetWidth(CTX_W)
     ctxMenu:SetBackdrop(ctxBD)
-    ctxMenu:SetBackdropColor(0.08,0.08,0.08,0.97); ctxMenu:SetBackdropBorderColor(0.45,0.45,0.45,1)
+    ctxMenu:SetBackdropColor(0.070,0.075,0.090,0.99); ctxMenu:SetBackdropBorderColor(1,1,1,0.14)
     ctxMenu:Hide()
 
     local ctxSub = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
     ctxSub:SetFrameStrata("FULLSCREEN_DIALOG"); ctxSub:SetWidth(CTX_W)
     ctxSub:SetFrameLevel(ctxMenu:GetFrameLevel() + 1)
     ctxSub:SetBackdrop(ctxBD)
-    ctxSub:SetBackdropColor(0.08,0.08,0.08,0.97); ctxSub:SetBackdropBorderColor(0.45,0.45,0.45,1)
+    ctxSub:SetBackdropColor(0.070,0.075,0.090,0.99); ctxSub:SetBackdropBorderColor(1,1,1,0.14)
     ctxSub:Hide()
     ctxSub:SetScript("OnLeave", function(self) self:Hide() end)
 
@@ -1574,7 +1566,7 @@ function BossModModule:BuildUI(parent, db)
     -- ---- Icon section widgets ----
     do
         local y = -8
-        Label(iconSec, LX, y, "Icon", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(iconSec, LX, y, "Icon", "GameFontNormalLarge")); y = y - 24
 
         Label(iconSec, LX, y-3, "Size:")
         local isizeEB = MakeEB(iconSec, CX, y, 52, true)
@@ -1637,7 +1629,7 @@ function BossModModule:BuildUI(parent, db)
         y = y - RH - 18
 
         Divider(iconSec, y); y = y - 14
-        Label(iconSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(iconSec, LX, y, "Text", "GameFontNormalLarge")); y = y - 24
 
         Label(iconSec, LX, y-4, "Font:")
         local fontOpts = GetFontList()
@@ -1682,7 +1674,7 @@ function BossModModule:BuildUI(parent, db)
         y = y - RH - 18
 
         Divider(iconSec, y); y = y - 14
-        Label(iconSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(iconSec, LX, y, "Position", "GameFontNormalLarge")); y = y - 24
 
         Label(iconSec, LX, y-4, "Anchor point:")
         local anchorDD = ScrollDrop(iconSec, 140, ANCHOR_OPTS,
@@ -1727,7 +1719,7 @@ function BossModModule:BuildUI(parent, db)
     -- ---- Text section widgets ----
     do
         local y = -8
-        Label(textSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(textSec, LX, y, "Text", "GameFontNormalLarge")); y = y - 24
 
         Label(textSec, LX, y-4, "Font:")
         local fontOpts = GetFontList()
@@ -1764,7 +1756,7 @@ function BossModModule:BuildUI(parent, db)
         y = y - RH - 18
 
         Divider(textSec, y); y = y - 14
-        Label(textSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(textSec, LX, y, "Position", "GameFontNormalLarge")); y = y - 24
 
         Label(textSec, LX, y-4, "Anchor point:")
         local anchorDD = ScrollDrop(textSec, 140, ANCHOR_OPTS,
@@ -1798,7 +1790,7 @@ function BossModModule:BuildUI(parent, db)
     -- ---- Bar section widgets ----
     do
         local y = -8
-        Label(barSec, LX, y, "Bar", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(barSec, LX, y, "Bar", "GameFontNormalLarge")); y = y - 24
 
         Label(barSec, LX, y-4, "Texture:")
         local texOpts = GetTexList()
@@ -1897,7 +1889,7 @@ function BossModModule:BuildUI(parent, db)
         y = y - RH - 18
 
         Divider(barSec, y); y = y - 14
-        Label(barSec, LX, y, "Text", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(barSec, LX, y, "Text", "GameFontNormalLarge")); y = y - 24
 
         Label(barSec, LX, y-4, "Font:")
         local bfOpts = GetFontList()
@@ -1942,7 +1934,7 @@ function BossModModule:BuildUI(parent, db)
         y = y - RH - 18
 
         Divider(barSec, y); y = y - 14
-        Label(barSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(barSec, LX, y, "Position", "GameFontNormalLarge")); y = y - 24
 
         Label(barSec, LX, y-4, "Anchor point:")
         local anchorDD = ScrollDrop(barSec, 140, ANCHOR_OPTS,
@@ -1990,7 +1982,7 @@ function BossModModule:BuildUI(parent, db)
     -- ---- Group section widgets ----
     do
         local y = -8
-        Label(grpSec, LX, y, "Group Layout", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(grpSec, LX, y, "Group Layout", "GameFontNormalLarge")); y = y - 24
 
         Label(grpSec, LX, y-4, "Growth direction:")
         local gdOpts = {{label="Down",value="DOWN"},{label="Up",value="UP"},{label="Right",value="RIGHT"},{label="Left",value="LEFT"}}
@@ -2025,11 +2017,11 @@ function BossModModule:BuildUI(parent, db)
         local memberPickerPopup = CreateFrame("Frame", nil, grpSec, "BackdropTemplate")
         memberPickerPopup:SetSize(200, 160)
         memberPickerPopup:SetFrameLevel(grpSec:GetFrameLevel() + 60)
-        memberPickerPopup:SetBackdrop({ bgFile="Interface/DialogFrame/UI-DialogBox-Background",
-            edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1, tile=true, tileSize=32,
-            insets={left=2,right=2,top=2,bottom=2} })
-        memberPickerPopup:SetBackdropColor(0.08,0.08,0.08,0.97)
-        memberPickerPopup:SetBackdropBorderColor(0.5,0.5,0.5,1)
+        memberPickerPopup:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8",
+            edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1,
+            insets={left=1,right=1,top=1,bottom=1} })
+        memberPickerPopup:SetBackdropColor(0.070,0.075,0.090,0.99)
+        memberPickerPopup:SetBackdropBorderColor(1,1,1,0.14)
         memberPickerPopup:SetPoint("BOTTOMLEFT", addMemberBtn, "TOPLEFT", 0, 2)
         memberPickerPopup:Hide()
 
@@ -2077,7 +2069,7 @@ function BossModModule:BuildUI(parent, db)
         grpSec:HookScript("OnHide", function() memberPickerPopup:Hide() end)
 
         Divider(grpSec, y); y = y - 14
-        Label(grpSec, LX, y, "Position", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(grpSec, LX, y, "Position", "GameFontNormalLarge")); y = y - 24
 
         Label(grpSec, LX, y-4, "Anchor point:")
         local anchorDD = ScrollDrop(grpSec, 140, ANCHOR_OPTS,
@@ -2138,7 +2130,7 @@ function BossModModule:BuildUI(parent, db)
     -- =============================================
     do
         local y = -8
-        Label(trigCont, LX, y, "Trigger Type", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(trigCont, LX, y, "Trigger Type", "GameFontNormalLarge")); y = y - 24
 
         Label(trigCont, LX, y-3, "Type:")
         local rbTmr = CreateFrame("CheckButton", nil, trigCont, "UIRadioButtonTemplate")
@@ -2329,7 +2321,7 @@ function BossModModule:BuildUI(parent, db)
 
         Divider(loadCont, y); y = y - 12
 
-        Label(loadCont, LX, y, "Load Conditions", "GameFontNormalLarge"):SetTextColor(1,0.82,0); y = y - 24
+        AR.UI.AccentText(Label(loadCont, LX, y, "Load Conditions", "GameFontNormalLarge")); y = y - 24
 
         local note = loadCont:CreateFontString(nil,"OVERLAY","GameFontNormalSmall")
         note:SetPoint("TOPLEFT", loadCont, "TOPLEFT", LX, y)
@@ -2530,8 +2522,8 @@ function BossModModule:BuildUI(parent, db)
             local row = CreateFrame("Frame", nil, parent, "BackdropTemplate")
             row:SetSize(rw, RULE_H)
             row:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
-            row:SetBackdropColor(0.08, 0.08, 0.08, 1)
-            row:SetBackdropBorderColor(0.22, 0.22, 0.22, 1)
+            row:SetBackdropColor(0.075, 0.08, 0.095, 1)
+            row:SetBackdropBorderColor(1, 1, 1, 0.08)
 
             -- Forward-declare UpdateVis so setter closures below can capture it
             local UpdateVis
@@ -2752,8 +2744,8 @@ function BossModModule:BuildUI(parent, db)
             if gf then
                 -- Make anchor box visible for preview (always show even with no children)
                 gf:SetSize(110, 26)
-                gf:SetBackdropColor(0.1, 0.4, 0.8, 0.35)
-                gf:SetBackdropBorderColor(0.4, 0.8, 1, 0.9)
+                gf:SetBackdropColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b, 0.30)
+                gf:SetBackdropBorderColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b, 0.95)
                 if gf.anchorLabel then gf.anchorLabel:Show() end
                 gf:SetFrameStrata("FULLSCREEN")
                 gf:EnableMouse(true)
@@ -2903,12 +2895,12 @@ function BossModModule:BuildUI(parent, db)
                 r.typeLabel:SetTextColor(0.6, 0.6, 0.6)
                 r:SetScript("OnEnter", function(s)
                     if not ref.e or ref.e.id ~= s.eid then
-                        s:SetBackdropColor(s.isGroup and 0.14 or 0.1, s.isGroup and 0.14 or 0.1, 0.22, 1)
+                        s:SetBackdropColor(0.12, 0.13, 0.16, 1)
                     end
                 end)
                 r:SetScript("OnLeave", function(s)
                     if not ref.e or ref.e.id ~= s.eid then
-                        s:SetBackdropColor(s.isGroup and 0.10 or 0.05, s.isGroup and 0.10 or 0.05, s.isGroup and 0.10 or 0.05, 1)
+                        s:SetBackdropColor(s.isGroup and 0.085 or 0.05, s.isGroup and 0.09 or 0.054, s.isGroup and 0.105 or 0.064, 1)
                     end
                 end)
                 rowPool[idx] = r
@@ -2921,9 +2913,15 @@ function BossModModule:BuildUI(parent, db)
             r:SetWidth(SB_W - 22 - indent)
             r:SetHeight(ROW_H)
             local active   = ref.e and ref.e.id == e.id
-            local idleBg   = r.isGroup and 0.10 or 0.05
-            r:SetBackdropColor(active and 0.1 or idleBg, active and 0.22 or idleBg, active and 0.55 or idleBg, 1)
-            r:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
+            local idleBg   = r.isGroup and 0.085 or 0.05
+            local ac       = AR.UI.accent
+            if active then
+                r:SetBackdropColor(ac.r * 0.22, ac.g * 0.22, ac.b * 0.22, 1)
+                r:SetBackdropBorderColor(ac.r, ac.g, ac.b, 0.7)
+            else
+                r:SetBackdropColor(idleBg, idleBg + 0.004, idleBg + 0.014, 1)
+                r:SetBackdropBorderColor(1, 1, 1, 0.06)
+            end
             r.icon:SetTexture(GetEntryIcon(e))
             local namePfx = (e.type == "group") and (groupExpanded[e.id] and "[-] " or "[+] ") or ""
             r.label:SetText(namePfx .. (e.name or "?"))
@@ -3040,7 +3038,7 @@ function BossModModule:BuildUI(parent, db)
             if def.groups then
                 local rowIdx = i
                 btn:SetScript("OnEnter", function(self)
-                    self.lbl:SetTextColor(1,0.82,0)
+                    self.lbl:SetTextColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b)
                     -- Rebuild submenu
                     for _, b in ipairs(smBtns) do b:Hide() end
                     local gs = def.groups
@@ -3048,7 +3046,7 @@ function BossModModule:BuildUI(parent, db)
                         local sb = smBtns[si]; local ge = gs[si]
                         sb.lbl:SetText(ge.name or "?"); sb.lbl:SetTextColor(1,1,1)
                         local gid = ge.id
-                        sb:SetScript("OnEnter", function(s) s.lbl:SetTextColor(1,0.82,0) end)
+                        sb:SetScript("OnEnter", function(s) s.lbl:SetTextColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b) end)
                         sb:SetScript("OnLeave", function(s) s.lbl:SetTextColor(1,1,1) end)
                         sb:SetScript("OnClick", function()
                             CloseCtx()
@@ -3071,7 +3069,7 @@ function BossModModule:BuildUI(parent, db)
                 btn:SetScript("OnClick", nil)
             else
                 local fn = def.fn
-                btn:SetScript("OnEnter", function(self) self.lbl:SetTextColor(1,0.82,0); ctxSub:Hide() end)
+                btn:SetScript("OnEnter", function(self) self.lbl:SetTextColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b); ctxSub:Hide() end)
                 btn:SetScript("OnLeave", function(self) self.lbl:SetTextColor(1,1,1) end)
                 btn:SetScript("OnClick", fn)
             end

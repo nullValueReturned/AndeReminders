@@ -143,23 +143,20 @@ end)
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
+local CreateFrame = AR.UI.CreateFrame
+
 function EnchantModule:BuildUI(parent, db)
-    local COL_NAME_X  = 12
+    local COL_NAME_X  = 16
     local COL_CHECK_X = 185
-    local COL_LABEL_X = 230
-    local COL_INPUT_X = 305
-    local ROW_HEIGHT  = 28
+    local COL_LABEL_X = 236
+    local ROW_HEIGHT  = 30
 
-    local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText("Enchant Reminders")
-    sectionTitle:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, "Enchant Reminders", COL_NAME_X, -16)
 
-    local cbScreenLabel = AR.UI.NotifyRow(parent, COL_NAME_X, -36, db.enchants.notify)
+    local cbScreenLabel = AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify)
 
     local cbGlobalIlvl = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbGlobalIlvl:SetSize(22, 22)
-    cbGlobalIlvl:SetPoint("LEFT", cbScreenLabel, "RIGHT", 16, 0)
+    cbGlobalIlvl:SetPoint("LEFT", cbScreenLabel, "RIGHT", 28, 0)
     cbGlobalIlvl:SetChecked(db.enchants.globalIlvl.enabled)
 
     local cbGlobalIlvlLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -167,8 +164,8 @@ function EnchantModule:BuildUI(parent, db)
     cbGlobalIlvlLabel:SetText("Global iLvl:")
 
     local globalIlvlInput = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    globalIlvlInput:SetSize(58, 20)
-    globalIlvlInput:SetPoint("LEFT", cbGlobalIlvlLabel, "RIGHT", 4, -1)
+    globalIlvlInput:SetSize(58, 24)
+    globalIlvlInput:SetPoint("LEFT", cbGlobalIlvlLabel, "RIGHT", 8, 0)
     globalIlvlInput:SetAutoFocus(false)
     globalIlvlInput:SetNumeric(true)
     globalIlvlInput:SetMaxLetters(4)
@@ -182,51 +179,43 @@ function EnchantModule:BuildUI(parent, db)
     globalIlvlInput:SetScript("OnEnterPressed", function(self) SaveGlobalIlvl(self) self:ClearFocus() end)
     globalIlvlInput:SetScript("OnEditFocusLost", SaveGlobalIlvl)
 
-    AR.UI.Divider(parent, -60)
+    AR.UI.Divider(parent, -84, COL_NAME_X - 4)
 
-    local HEADER_TOP = -68
+    local HEADER_TOP = -96
 
     local hSlot = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hSlot:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, HEADER_TOP)
-    hSlot:SetText("Slot")
-    hSlot:SetTextColor(0.6, 0.6, 0.6)
+    hSlot:SetText("SLOT")
 
     local hRemind = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hRemind:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_CHECK_X - 8, HEADER_TOP)
-    hRemind:SetText("Remind")
-    hRemind:SetTextColor(0.6, 0.6, 0.6)
+    hRemind:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_CHECK_X + 2, HEADER_TOP)
+    hRemind:SetText("REMIND")
 
     local hIlvl = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hIlvl:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_LABEL_X, HEADER_TOP)
-    hIlvl:SetText("Min iLvl")
-    hIlvl:SetTextColor(0.6, 0.6, 0.6)
+    hIlvl:SetText("MINIMUM ITEM LEVEL")
 
-    AR.UI.Divider(parent, HEADER_TOP - 14)
-
-    local SLOTS_TOP = HEADER_TOP - 20
+    local SLOTS_TOP = HEADER_TOP - 22
     local slotEditBoxes = {}
 
     for i, slot in ipairs(ENCHANTABLE_SLOTS) do
         local slotData = db.enchants.slots[slot.id]
         local y = SLOTS_TOP - (i - 1) * ROW_HEIGHT
 
+        AR.UI.RowStripe(parent, y + 5, ROW_HEIGHT, i, COL_NAME_X - 4)
+
         local nameLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        nameLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
+        nameLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 4, y - 1)
         nameLabel:SetText(slot.name)
 
         local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        cb:SetSize(24, 24)
-        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_CHECK_X, y + 3)
+        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_CHECK_X, y + 4)
         cb:SetChecked(slotData.enabled)
         cb:SetScript("OnClick", function(self) slotData.enabled = self:GetChecked() end)
 
-        local ilvlLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        ilvlLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_LABEL_X, y)
-        ilvlLabel:SetText("Min iLvl:")
-
         local editBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-        editBox:SetSize(58, 20)
-        editBox:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_INPUT_X, y + 3)
+        editBox:SetSize(64, 24)
+        editBox:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_LABEL_X, y + 2)
         editBox:SetAutoFocus(false)
         editBox:SetNumeric(true)
         editBox:SetMaxLetters(4)

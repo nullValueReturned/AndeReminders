@@ -1,15 +1,15 @@
-local AR   = AndeReminders
-local Util = AR.Util
+local AR                   = AndeReminders
+local Util                 = AR.Util
 
-local WorldMarkersModule  = {}
-local TargetMarkersModule = {}
+local WorldMarkersModule   = {}
+local TargetMarkersModule  = {}
 
 -- World marker placement is a protected action (requires a hardware event),
 -- so the real placement has to run through a SecureActionButtonTemplate with
 -- a macro attribute. Everything else (the keybind capture UI, storage) is
 -- plain insecure Lua that just points a physical key at these buttons.
-local BUTTON_PREFIX     = "AndeRemindersWM"
-local CLEAR_BUTTON_NAME = "AndeRemindersWMClear"
+local BUTTON_PREFIX        = "AndeRemindersWM"
+local CLEAR_BUTTON_NAME    = "AndeRemindersWMClear"
 
 -- Target markers (raid target icons) use the same approach: secure buttons that
 -- run "/tm N" on the current target, bound to physical keys.
@@ -20,15 +20,15 @@ local TM_CLEAR_BUTTON_NAME = "AndeRemindersTMClear"
 -- icons (/raid_target N). This mapping was confirmed in-game:
 --   1 Blue Square, 2 Green Triangle, 3 Purple Diamond, 4 Red Cross,
 --   5 Yellow Star, 6 Orange Circle, 7 Pale Blue Moon, 8 White Skull
-local WORLD_ACTIONS = {
-    { key = "star",     label = "Star (Yellow)",       index = 5, icon = 1 },
-    { key = "circle",   label = "Circle (Orange)",     index = 6, icon = 2 },
-    { key = "diamond",  label = "Diamond (Purple)",    index = 3, icon = 3 },
-    { key = "triangle", label = "Triangle (Green)",    index = 2, icon = 4 },
-    { key = "moon",     label = "Moon (Pale Blue)",    index = 7, icon = 5 },
-    { key = "square",   label = "Square (Blue)",       index = 1, icon = 6 },
-    { key = "cross",    label = "Cross (Red)",         index = 4, icon = 7 },
-    { key = "skull",    label = "Skull (White)",       index = 8, icon = 8 },
+local WORLD_ACTIONS        = {
+    { key = "star",     label = "Star",             index = 5, icon = 1 },
+    { key = "circle",   label = "Circle",           index = 6, icon = 2 },
+    { key = "diamond",  label = "Diamond",          index = 3, icon = 3 },
+    { key = "triangle", label = "Triangle",         index = 2, icon = 4 },
+    { key = "moon",     label = "Moon",             index = 7, icon = 5 },
+    { key = "square",   label = "Square",           index = 1, icon = 6 },
+    { key = "cross",    label = "Cross",            index = 4, icon = 7 },
+    { key = "skull",    label = "Skull",            index = 8, icon = 8 },
     { key = "clearAll", label = "Clear All Markers" },
 }
 
@@ -54,7 +54,7 @@ end
 TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "clearAll", label = "Clear All Target Markers" }
 
 local GROUPS = {
-    world  = { dbKey = "worldMarkers",  actions = WORLD_ACTIONS,  buttonPrefix = BUTTON_PREFIX,    clearName = CLEAR_BUTTON_NAME },
+    world  = { dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX, clearName = CLEAR_BUTTON_NAME },
     target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX, clearName = TM_CLEAR_BUTTON_NAME },
 }
 local GROUP_ORDER = { GROUPS.world, GROUPS.target }
@@ -242,8 +242,15 @@ end
 -- ---------------------------------------------------------------------------
 
 local IGNORED_KEYS = {
-    LSHIFT = true, RSHIFT = true, LCTRL = true, RCTRL = true, LALT = true, RALT = true,
-    UNKNOWN = true, LeftButton = true, RightButton = true,
+    LSHIFT = true,
+    RSHIFT = true,
+    LCTRL = true,
+    RCTRL = true,
+    LALT = true,
+    RALT = true,
+    UNKNOWN = true,
+    LeftButton = true,
+    RightButton = true,
 }
 
 local MOUSE_BUTTON_NAMES = {
@@ -272,9 +279,24 @@ local function GetCaptureFrame()
     f:EnableMouseWheel(true)
     f:SetPropagateKeyboardInput(false)
 
-    local text = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    text:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-    text:SetText("Press a key to bind (ESC to cancel)")
+    -- Dim the screen and put the prompt on a small card so it reads against any scene.
+    local dim = f:CreateTexture(nil, "BACKGROUND")
+    dim:SetAllPoints()
+    dim:SetColorTexture(0, 0, 0, 0.55)
+
+    local card = AR.UI.CreateFrame("Frame", nil, f)
+    card:SetSize(420, 84)
+    card:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+    AR.UI.Surface(card, AR.UI.Colors.window, AR.UI.Colors.border)
+
+    local text = card:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    text:SetPoint("CENTER", card, "CENTER", 0, 8)
+    text:SetText("Press a key to bind")
+    AR.UI.AccentText(text)
+
+    local hint = card:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hint:SetPoint("TOP", text, "BOTTOM", 0, -8)
+    hint:SetText("ESC to cancel")
     f.text = text
 
     f:Hide()
@@ -344,37 +366,40 @@ end
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
-local COL_NAME_X = 12
-local ROW_HEIGHT = 26
+local CreateFrame = AR.UI.CreateFrame
+
+local COL_NAME_X = 16
+local ROW_HEIGHT = 32
 
 -- Section title, optional extra widgets (returns the next y), then the keybind rows.
 -- `rowExtra(action, anchorBtn)` optionally adds a widget to the right of each row.
 local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
-    local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText(title)
-    sectionTitle:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, title, COL_NAME_X, -16)
 
-    local y = extraWidgets(-36)
+    local y = extraWidgets(-52)
 
-    AR.UI.Divider(parent, y)
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
 
-    y = y - 16
+    y = y - 14
 
+    local stripe = 0
     for _, action in ipairs(group.actions) do
         if action.key == "clearAll" then
-            y = y - 8
+            y = y - 10
         end
 
+        stripe = stripe + 1
+        AR.UI.RowStripe(parent, y + 4, ROW_HEIGHT, stripe, COL_NAME_X - 4)
+
         local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        label:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
+        label:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 4, y - 2)
         label:SetWidth(150)
         label:SetJustifyH("LEFT")
         label:SetText(action.label)
 
         local bindBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-        bindBtn:SetSize(140, 22)
-        bindBtn:SetPoint("LEFT", label, "RIGHT", 10, -1)
+        bindBtn:SetSize(150, 24)
+        bindBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 170, y + 1)
 
         local function Refresh()
             bindBtn:SetText(db[group.dbKey].keybinds[action.key] or "Unbound")
@@ -393,7 +418,7 @@ local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
         end)
 
         local clearBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-        clearBtn:SetSize(22, 22)
+        clearBtn:SetSize(24, 24)
         clearBtn:SetPoint("LEFT", bindBtn, "RIGHT", 4, 0)
         clearBtn:SetText("x")
         clearBtn:SetScript("OnClick", function()
@@ -414,8 +439,7 @@ end
 function WorldMarkersModule:BuildUI(parent, db)
     BuildKeybindTab(parent, db, GROUPS.world, "World Marker Keybinds", function(y)
         local cbCursor = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        cbCursor:SetSize(24, 24)
-        cbCursor:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+        cbCursor:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
         cbCursor:SetChecked(db.worldMarkers.useCursor)
         cbCursor:SetScript("OnClick", function(self)
             local wanted = self:GetChecked()
@@ -463,8 +487,7 @@ function TargetMarkersModule:BuildUI(parent, db)
 
     BuildKeybindTab(parent, db, GROUPS.target, "Target Marker Keybinds", function(y)
         local cbMouseover = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-        cbMouseover:SetSize(24, 24)
-        cbMouseover:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+        cbMouseover:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
         cbMouseover:SetChecked(tm.useMouseover)
         cbMouseover:SetScript("OnClick", function(self)
             local wanted = self:GetChecked()
@@ -480,14 +503,14 @@ function TargetMarkersModule:BuildUI(parent, db)
         mouseoverLabel:SetPoint("LEFT", cbMouseover, "RIGHT", 6, 0)
         mouseoverLabel:SetText("Mark the mouseover unit instead of your target (per-key override on the right)")
 
-        local hint = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        hint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y - 26)
+        local hint = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        hint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y - 28)
         hint:SetText("Requires group leader or assist when grouped.")
-        return y - 48
+        return y - 54
     end, function(action, anchor)
         local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-        btn:SetSize(140, 22)
-        btn:SetPoint("LEFT", anchor, "RIGHT", 10, 0)
+        btn:SetSize(150, 24)
+        btn:SetPoint("LEFT", anchor, "RIGHT", 12, 0)
         modeButtons[action] = btn
         btn:SetScript("OnClick", function()
             -- Cycle: Default -> Target -> Mouseover -> Default

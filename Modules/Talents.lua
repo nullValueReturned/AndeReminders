@@ -172,20 +172,18 @@ end)
 -- Settings UI
 -- ---------------------------------------------------------------------------
 
+local CreateFrame = AR.UI.CreateFrame
+
 function TalentModule:BuildUI(parent, db)
-    local COL_NAME_X = 12
-    local ROW_HEIGHT = 32
+    local COL_NAME_X = 16
+    local ROW_HEIGHT = 36
 
-    local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
-    sectionTitle:SetText("Talent Reminders")
-    sectionTitle:SetTextColor(1, 0.82, 0)
+    AR.UI.Title(parent, "Talent Reminders", COL_NAME_X, -16)
 
-    local y = -36
+    local y = -52
 
     local cbActiveBuild = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-    cbActiveBuild:SetSize(24, 24)
-    cbActiveBuild:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+    cbActiveBuild:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
     cbActiveBuild:SetChecked(db.talents.checks.showActiveBuild)
     cbActiveBuild:SetScript("OnClick", function(self)
         db.talents.checks.showActiveBuild = self:GetChecked()
@@ -195,39 +193,37 @@ function TalentModule:BuildUI(parent, db)
     activeBuildLabel:SetPoint("LEFT", cbActiveBuild, "RIGHT", 6, 0)
     activeBuildLabel:SetText("Show active talent build on ready check")
 
-    y = y - 20
+    y = y - 26
 
     local tleNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    tleNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 30, y)
+    tleNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y)
     tleNote:SetText("Uses TalentLoadoutEx names if the addon is loaded.")
-    tleNote:SetTextColor(0.5, 0.5, 0.5)
+
+    y = y - 26
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
 
     y = y - 18
-    AR.UI.Divider(parent, y)
-
-    y = y - 14
 
     local fontSectionLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     fontSectionLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-    fontSectionLabel:SetText("Build text appearance:")
-    fontSectionLabel:SetTextColor(0.7, 0.7, 0.7)
+    fontSectionLabel:SetText("BUILD TEXT APPEARANCE")
 
-    y = y - ROW_HEIGHT + 8
+    y = y - ROW_HEIGHT + 4
 
     local fontLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     fontLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-    fontLabel:SetText("Font:")
+    fontLabel:SetText("Font")
 
-    local dropBtn = AR.UI.Dropdown(parent, 200, Fonts.List(),
+    local dropBtn = AR.UI.Dropdown(parent, 210, Fonts.List(),
         function() return db.talents.buildText.fontName end,
         function(name) db.talents.buildText.fontName = name end,
         { kind = "font", maxHeight = 300 })
-    dropBtn:SetPoint("LEFT", fontLabel, "RIGHT", 10, 0)
+    dropBtn:SetPoint("LEFT", fontLabel, "RIGHT", 12, 0)
 
     -- ---- Color picker ----
     local colorLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    colorLabel:SetPoint("LEFT", dropBtn, "RIGHT", 20, 0)
-    colorLabel:SetText("Color:")
+    colorLabel:SetPoint("LEFT", dropBtn, "RIGHT", 24, 0)
+    colorLabel:SetText("Color")
 
     local swatch = AR.UI.ColorSwatch(parent,
         function()
@@ -237,17 +233,17 @@ function TalentModule:BuildUI(parent, db)
         function(r, g, b)
             local cfg = db.talents.buildText
             cfg.r, cfg.g, cfg.b = r, g, b
-        end)
-    swatch:SetPoint("LEFT", colorLabel, "RIGHT", 8, 0)
+        end, 24)
+    swatch:SetPoint("LEFT", colorLabel, "RIGHT", 10, 0)
 
     -- ---- Font size input (same row as font/color) ----
     local sizeLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    sizeLabel:SetPoint("LEFT", swatch, "RIGHT", 20, 0)
-    sizeLabel:SetText("Size:")
+    sizeLabel:SetPoint("LEFT", swatch, "RIGHT", 24, 0)
+    sizeLabel:SetText("Size")
 
     local sizeInput = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
-    sizeInput:SetSize(44, 20)
-    sizeInput:SetPoint("LEFT", sizeLabel, "RIGHT", 6, -1)
+    sizeInput:SetSize(50, 24)
+    sizeInput:SetPoint("LEFT", sizeLabel, "RIGHT", 10, 0)
     sizeInput:SetAutoFocus(false)
     sizeInput:SetNumeric(true)
     sizeInput:SetMaxLetters(3)
@@ -264,8 +260,8 @@ function TalentModule:BuildUI(parent, db)
 
     -- ---- Preview button (same row as font/color) ----
     local previewBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    previewBtn:SetSize(100, 22)
-    previewBtn:SetPoint("LEFT", sizeInput, "RIGHT", 16, 1)
+    previewBtn:SetSize(110, 24)
+    previewBtn:SetPoint("LEFT", sizeInput, "RIGHT", 20, 0)
     previewBtn:SetText("Preview")
 
     local previewing = false
