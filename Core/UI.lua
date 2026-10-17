@@ -685,6 +685,7 @@ function UI.Dropdown(parent, width, options, getter, setter, config)
 
     Refresh()
     btn.Refresh = Refresh
+    btn.popup = popup
     return btn
 end
 

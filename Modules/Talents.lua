@@ -10,29 +10,33 @@ local MAX_RULES_PER_SPEC = 10
 
 -- Content a loadout rule can apply to. The most specific matching rule wins (higher rank).
 -- Tests take the instanceType and difficultyID from GetInstanceInfo(); "instance" rules
--- instead match the instanceID they were created in.
+-- instead match the instanceID they were created in. Which boss is next cannot be known at a
+-- ready check, so "raid" covers every boss. Entries marked legacy come from an older version
+-- of this list: existing rules keep working but they are no longer offered when adding.
 local SCOPES = {
-    { key = "raid",      rank = 1, label = "Any raid",
+    { key = "dungeon",   rank = 1, label = "Any dungeon",
+      test = function(t) return t == "party" end },
+    { key = "raid",      rank = 1, label = "Any raid boss",
       test = function(t) return t == "raid" end },
-    { key = "raid17",    rank = 2, label = "Raid - LFR",
+    { key = "raid17", legacy = true,    rank = 2, label = "Raid - LFR",
       test = function(t, d) return t == "raid" and (d == 17 or d == 7) end },
-    { key = "raid14",    rank = 2, label = "Raid - Normal",
+    { key = "raid14", legacy = true,    rank = 2, label = "Raid - Normal",
       test = function(t, d) return t == "raid" and d == 14 end },
-    { key = "raid15",    rank = 2, label = "Raid - Heroic",
+    { key = "raid15", legacy = true,    rank = 2, label = "Raid - Heroic",
       test = function(t, d) return t == "raid" and d == 15 end },
-    { key = "raid16",    rank = 2, label = "Raid - Mythic",
+    { key = "raid16", legacy = true,    rank = 2, label = "Raid - Mythic",
       test = function(t, d) return t == "raid" and d == 16 end },
-    { key = "mplus",     rank = 2, label = "Mythic+ keystone dungeon",
+    { key = "mplus", legacy = true,     rank = 2, label = "Mythic+ keystone dungeon",
       test = function(t, d) return t == "party" and d == 8 end },
-    { key = "dungeon23", rank = 2, label = "Mythic dungeon (no keystone)",
+    { key = "dungeon23", legacy = true, rank = 2, label = "Mythic dungeon (no keystone)",
       test = function(t, d) return t == "party" and d == 23 end },
-    { key = "dungeon2",  rank = 2, label = "Heroic dungeon",
+    { key = "dungeon2", legacy = true,  rank = 2, label = "Heroic dungeon",
       test = function(t, d) return t == "party" and d == 2 end },
-    { key = "dungeon1",  rank = 2, label = "Normal dungeon",
+    { key = "dungeon1", legacy = true,  rank = 2, label = "Normal dungeon",
       test = function(t, d) return t == "party" and d == 1 end },
-    { key = "delve",     rank = 2, label = "Delves",
+    { key = "delve", legacy = true,     rank = 2, label = "Delves",
       test = function(_, d) return d == 208 end },
-    { key = "instance",  rank = 3, label = "The instance I'm in now (any difficulty)" },
+    { key = "instance",  rank = 3, label = "The dungeon or raid I'm in now" },
 }
 local SCOPE_BY_KEY = {}
 for _, scope in ipairs(SCOPES) do SCOPE_BY_KEY[scope.key] = scope end
@@ -178,6 +182,81 @@ function TalentModule:GetExpectedLoadout()
         end
     end
     return expected
+end
+
+-- Every loadout the player can pick for the current spec, in the same order of trust as
+-- GetActiveLoadoutInfo: TalentLoadoutEx's saved list first, then the game's own loadouts.
+local function GetAvailableLoadouts()
+    local names, seen = {}, {}
+    local function Add(name)
+        if type(name) == "string" and name ~= "" and not seen[name] then
+            seen[name] = true
+            names[#names + 1] = name
+        end
+    end
+
+    if C_AddOns and C_AddOns.LoadAddOn then C_AddOns.LoadAddOn("Blizzard_PlayerSpells") end
+    local specIndex, specID = Util.GetSpec()
+    if not specIndex then return names end
+
+    -- TalentLoadoutEx keeps its loadouts in a saved variable: [classFile][specIndex] = { { name = ... }, ... }
+    local _, classFile = UnitClass("player")
+    local tlx = TalentLoadoutEx and TalentLoadoutEx[classFile] and TalentLoadoutEx[classFile][specIndex]
+    if type(tlx) == "table" then
+        for _, data in ipairs(tlx) do Add(data.name) end
+    end
+
+    if C_ClassTalents.GetStarterBuildActive() then Add(STARTER_BUILD_NAME) end
+    for _, configID in ipairs(C_ClassTalents.GetConfigIDsBySpecID(specID) or {}) do
+        local info = C_Traits.GetConfigInfo(configID)
+        if info then Add(info.name) end
+    end
+    return names
+end
+
+-- The current expansion's dungeons and raids (plus the Mythic+ pool, which can reach back to
+-- older dungeons) as { id = instanceID, name }, sorted by name. instanceID is the map id that
+-- GetInstanceInfo() reports, which is what rules match on.
+local function GetCurrentContent()
+    local dungeons, raids, seen = {}, {}, {}
+    local function Add(list, instanceID, name)
+        if instanceID and instanceID > 0 and name and not seen[instanceID] then
+            seen[instanceID] = true
+            list[#list + 1] = { id = instanceID, name = name }
+        end
+    end
+
+    if C_ChallengeMode and C_ChallengeMode.GetMapTable then
+        for _, challengeID in ipairs(C_ChallengeMode.GetMapTable() or {}) do
+            local name, _, _, _, _, mapID = C_ChallengeMode.GetMapUIInfo(challengeID)
+            Add(dungeons, mapID, name)
+        end
+    end
+
+    -- The Encounter Journal's newest tier. Selecting a tier changes what the journal shows, so
+    -- the previous one is put back.
+    if EJ_GetNumTiers and EJ_SelectTier and EJ_GetInstanceByIndex then
+        pcall(function()
+            local previous = EJ_GetCurrentTier and EJ_GetCurrentTier()
+            EJ_SelectTier(EJ_GetNumTiers())
+            for _, isRaid in ipairs({ false, true }) do
+                local i = 1
+                while true do
+                    local journalID, name = EJ_GetInstanceByIndex(i, isRaid)
+                    if not journalID then break end
+                    local mapID = select(10, EJ_GetInstanceInfo(journalID))
+                    Add(isRaid and raids or dungeons, mapID, name)
+                    i = i + 1
+                end
+            end
+            if previous then EJ_SelectTier(previous) end
+        end)
+    end
+
+    local function ByName(a, b) return a.name < b.name end
+    table.sort(dungeons, ByName)
+    table.sort(raids, ByName)
+    return dungeons, raids
 end
 
 function TalentModule:RunCheck(isReadyCheck)
@@ -394,25 +473,75 @@ function TalentModule:BuildUI(parent, db)
     hint:SetWordWrap(true)
     hint:SetTextColor(1, 1, 1, 0.55)
     hint:SetText("On a ready check you get a red warning if your active loadout is not the one set here for the " ..
-        "content you are in. To add one: 1) switch to the loadout you want, 2) pick the content, 3) click Add rule.")
+        "content you are in. Pick the content and the loadout you want there, then click Add rule. A specific " ..
+        "dungeon or raid wins over \"Any dungeon\" / \"Any raid boss\".")
 
     y = y - 40
-    local selectedScope = SCOPES[1].key
-    local scopeOptions = {}
-    for _, scope in ipairs(SCOPES) do table.insert(scopeOptions, { label = scope.label, value = scope.key }) end
+    -- Content: the generic choices, then this expansion's dungeons and raids. A choice is a
+    -- scope key ("dungeon", "raid", "instance") or "i:<instanceID>" for a listed instance.
+    local selectedContent = "dungeon"
+    local contentLabels = {}
+    local contentOptions = {}
+    local function AddContent(value, label)
+        contentOptions[#contentOptions + 1] = { label = label, value = value }
+        contentLabels[value] = label
+    end
+    for _, scope in ipairs(SCOPES) do
+        if not scope.legacy and scope.key ~= "instance" then AddContent(scope.key, scope.label) end
+    end
+    local dungeonList, raidList = GetCurrentContent()
+    for _, d in ipairs(dungeonList) do AddContent("i:" .. d.id, "Dungeon - " .. d.name) end
+    for _, r in ipairs(raidList) do AddContent("i:" .. r.id, "Raid - " .. r.name) end
+    AddContent("instance", SCOPE_BY_KEY.instance.label)
 
     local scopeLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     scopeLabel:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y - 5)
     scopeLabel:SetText("Content")
 
-    local scopeDrop = AR.UI.Dropdown(parent, 280, scopeOptions,
-        function() return selectedScope end,
-        function(value) selectedScope = value end,
-        { maxHeight = 280 })
+    local scopeDrop = AR.UI.Dropdown(parent, 270, contentOptions,
+        function() return selectedContent end,
+        function(value) selectedContent = value end,
+        { maxHeight = 300 })
     scopeDrop:SetPoint("LEFT", scopeLabel, "RIGHT", 12, 0)
 
-    local addBtn = AR.UI.Button(parent, "Add rule for my current loadout", 230, 24)
-    addBtn:SetPoint("LEFT", scopeDrop, "RIGHT", 12, 0)
+    -- Loadout: every loadout of the current spec. The list changes with the spec and when
+    -- loadouts are added, so the dropdown (whose options are fixed once built) is rebuilt then.
+    local loadoutLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    loadoutLabel:SetPoint("LEFT", scopeDrop, "RIGHT", 22, 0)
+    loadoutLabel:SetText("Loadout")
+
+    local addBtn = AR.UI.Button(parent, "Add rule", 90, 24)
+    local selectedLoadout, loadoutDrop, loadoutSig
+
+    local function RefreshLoadoutPicker()
+        local names = GetAvailableLoadouts()
+        local sig = table.concat(names, "\1")
+        if loadoutDrop and sig == loadoutSig then return end
+        loadoutSig = sig
+
+        local active = GetActiveLoadoutInfo()
+        local found
+        for _, name in ipairs(names) do if name == selectedLoadout then found = true end end
+        if not found then
+            selectedLoadout = nil
+            for _, name in ipairs(names) do if name == active then selectedLoadout = name end end
+            selectedLoadout = selectedLoadout or names[1]
+        end
+
+        if loadoutDrop then
+            loadoutDrop:Hide()
+            loadoutDrop.popup:Hide()
+        end
+        local options = #names > 0 and names or { { label = "(no loadouts found)", value = "" } }
+        loadoutDrop = AR.UI.Dropdown(parent, 230, options,
+            function() return selectedLoadout or "" end,
+            function(value) selectedLoadout = value ~= "" and value or nil end,
+            { maxHeight = 260 })
+        loadoutDrop:SetPoint("LEFT", loadoutLabel, "RIGHT", 12, 0)
+        addBtn:ClearAllPoints()
+        addBtn:SetPoint("LEFT", loadoutDrop, "RIGHT", 12, 0)
+    end
+    RefreshLoadoutPicker()
 
     y = y - 32
     local statusText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -523,19 +652,24 @@ function TalentModule:BuildUI(parent, db)
         end
         for i = shown + 1, #ruleRows do ruleRows[i]:Hide() end
         emptyText:SetShown(shown == 0)
+        RefreshLoadoutPicker()
         RefreshStatus()
     end
 
     addBtn:SetScript("OnClick", function()
         local _, specID = Util.GetSpec()
-        local loadout = GetActiveLoadoutInfo()
-        if not specID or not loadout then
-            Util.Print("no active talent loadout detected.")
+        if not specID or not selectedLoadout then
+            Util.Print("pick a loadout first (none found for this spec).")
             return
         end
 
-        local rule = { specID = specID, scope = selectedScope, loadout = loadout }
-        if selectedScope == "instance" then
+        local rule = { specID = specID, scope = selectedContent, loadout = selectedLoadout }
+        local listedID = tonumber(selectedContent:match("^i:(%d+)$"))
+        if listedID then
+            rule.scope = "instance"
+            rule.instanceID = listedID
+            rule.instanceName = contentLabels[selectedContent]:gsub("^%a+ %- ", "")
+        elseif selectedContent == "instance" then
             local name, instType, _, _, _, _, _, instanceID = GetInstanceInfo()
             if instType == "none" then
                 Util.Print("enter the dungeon or raid first, then add this rule.")

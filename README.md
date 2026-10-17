@@ -14,7 +14,7 @@ A lightweight World of Warcraft addon (Midnight, patch 12.1.5) that nudges you a
 - Flashes your active talent loadout name + icon on screen when a ready check fires.
 - Uses [TalentLoadoutEx](https://www.curseforge.com/wow/addons/talent-loadout-ex) names and icons if installed; otherwise falls back to the native saved loadout name (or "Starter Build" while that is active).
 - Configurable font, size, and color. Shows `unknown talent loadout` if none is detected.
-- **Expected loadout by content**: on the Talents tab, switch to the loadout you want, pick the content (any raid, a raid difficulty, Mythic+, a dungeon difficulty, Delves, or the instance you are standing in) and click **Add rule**. On a ready check you get a red "Wrong talent loadout! Switch to: ..." warning if the active loadout differs. Rules are per spec, the most specific one wins, and the tab shows your active loadout, where you are, and whether the rule for here matches.
+- **Expected loadout by content**: on the Talents tab, pick the content ("Any dungeon", "Any raid boss", or one of this expansion's dungeons and raids), pick one of your loadouts (TalentLoadoutEx's list first, then the game's saved loadouts) and click **Add rule**. On a ready check you get a red "Wrong talent loadout! Switch to: ..." warning if the active loadout differs. The next raid boss can't be known at a ready check, so raid rules cover every boss. Rules are per spec, a specific dungeon or raid wins over the "any" choices, and the tab shows your active loadout, where you are, and whether the rule for here matches.
 
 ### Gear
 On login, zone change, and equip, checks for:
