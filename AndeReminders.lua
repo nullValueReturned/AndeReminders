@@ -2,6 +2,7 @@ AndeReminders = {}
 local AR = AndeReminders
 
 AR.registeredModules = {}
+AR.modules           = {}  -- registered name -> module
 AR.anchorFrames      = {}
 AR.anchorsShown      = false
 
@@ -21,12 +22,13 @@ end
 
 function AR:RegisterModule(name, module)
     table.insert(self.registeredModules, { name = name, module = module })
+    self.modules[name] = module
 end
 
 function AR:InitDB()
-    if not AndeRemindersDB then AndeRemindersDB = {} end
-    AR.db = AndeRemindersDB
+    AR:LoadProfile()
     if not AR.db.anchors then AR.db.anchors = {} end
+    if not AR.db.anchorOpts then AR.db.anchorOpts = { snap = false, size = 10 } end
     if not AR.db.accent then
         AR.db.accent = { r = AR.UI.accent.r, g = AR.UI.accent.g, b = AR.UI.accent.b }
     end
@@ -54,6 +56,26 @@ function AR:GetAnchor(name)
 end
 
 local toggleAnchorsBtn
+local selectedAnchor
+
+function AR:GetAnchorDefs() return ANCHOR_DEFS end
+
+local function Deselect()
+    if selectedAnchor then
+        selectedAnchor:EnableKeyboard(false)
+        selectedAnchor.selected:Hide()
+        selectedAnchor = nil
+    end
+end
+
+-- Click an anchor to select it: the arrow keys then nudge it (Shift = 10 units).
+local function Select(f)
+    if selectedAnchor == f then return end
+    Deselect()
+    selectedAnchor = f
+    f:EnableKeyboard(true)
+    f.selected:Show()
+end
 
 function AR:ToggleAnchors()
     AR.anchorsShown = not AR.anchorsShown
@@ -61,9 +83,29 @@ function AR:ToggleAnchors()
         f:SetAlpha(AR.anchorsShown and 1 or 0)
         f:EnableMouse(AR.anchorsShown)
     end
+    if not AR.anchorsShown then Deselect() end
     if toggleAnchorsBtn then
         toggleAnchorsBtn:SetText(AR.anchorsShown and "Hide Anchors" or "Toggle Anchors")
     end
+end
+
+-- Offsets are from the screen centre. Everything anchored to the frame follows it.
+function AR:SetAnchorPosition(name, x, y)
+    local f = AR.anchorFrames[name]
+    if not f then return end
+    AR.db.anchors[name].x, AR.db.anchors[name].y = x, y
+    f:ClearAllPoints()
+    f:SetPoint("CENTER", UIParent, "CENTER", x, y)
+    if AR.OnAnchorMoved then AR.OnAnchorMoved(name) end
+end
+
+local function SnapToGrid(v)
+    local opts = AR.db.anchorOpts
+    if opts and opts.snap then
+        local grid = math.max(1, opts.size or 10)
+        return math.floor(v / grid + 0.5) * grid
+    end
+    return v
 end
 
 function AR:CreateAnchors()
@@ -88,22 +130,37 @@ function AR:CreateAnchors()
             tint:SetColorTexture(r, g, b, 0.16)
         end)
 
+        local selected = f:CreateTexture(nil, "BACKGROUND", nil, 2)
+        selected:SetAllPoints()
+        AR.UI.OnAccent(function(r, g, b) selected:SetColorTexture(r, g, b, 0.30) end)
+        selected:Hide()
+        f.selected = selected
+
         local lbl = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         lbl:SetPoint("CENTER", f, "CENTER", 0, 0)
         lbl:SetText(def.label)
 
+        f:SetScript("OnMouseDown", function(self) Select(self) end)
         f:SetScript("OnDragStart", f.StartMoving)
         f:SetScript("OnDragStop", function(self)
             self:StopMovingOrSizing()
             local cx, cy = self:GetCenter()
             local ux, uy = UIParent:GetCenter()
-            local dx = math.floor(cx - ux + 0.5)
-            local dy = math.floor(cy - uy + 0.5)
-            AR.db.anchors[def.name].x = dx
-            AR.db.anchors[def.name].y = dy
-            -- Re-anchor so dependents (notification frames) update correctly
-            self:ClearAllPoints()
-            self:SetPoint("CENTER", UIParent, "CENTER", dx, dy)
+            -- Re-anchoring also updates dependents (notification frames) correctly.
+            AR:SetAnchorPosition(def.name, SnapToGrid(math.floor(cx - ux + 0.5)), SnapToGrid(math.floor(cy - uy + 0.5)))
+        end)
+        f:SetScript("OnKeyDown", function(self, key)
+            local dx, dy = 0, 0
+            if key == "LEFT" then dx = -1 elseif key == "RIGHT" then dx = 1
+            elseif key == "UP" then dy = 1 elseif key == "DOWN" then dy = -1 end
+            if dx == 0 and dy == 0 then
+                self:SetPropagateKeyboardInput(true)  -- not ours: let the game have the key
+                return
+            end
+            self:SetPropagateKeyboardInput(false)
+            local step = IsShiftKeyDown() and 10 or 1
+            local cur = AR.db.anchors[def.name]
+            AR:SetAnchorPosition(def.name, cur.x + dx * step, cur.y + dy * step)
         end)
 
         f:SetAlpha(0)
@@ -117,11 +174,7 @@ end
 function AR:ResetAnchors()
     for _, def in ipairs(ANCHOR_DEFS) do
         AR.db.anchors[def.name] = { x = def.x, y = def.y }
-        local f = AR.anchorFrames[def.name]
-        if f then
-            f:ClearAllPoints()
-            f:SetPoint("CENTER", UIParent, "CENTER", def.x, def.y)
-        end
+        if AR.anchorFrames[def.name] then AR:SetAnchorPosition(def.name, def.x, def.y) end
     end
 end
 
@@ -173,7 +226,15 @@ local SIDEBAR_W          = 176
 local TOPBAR_H           = 46
 local NAV_H              = 34
 
-local function SelectTab(index)
+local SelectTab
+
+function AR:SetWindowScale(scale)
+    scale = math.max(0.6, math.min(1.4, scale))
+    AR.root.ui.scale = scale
+    if settingsFrame then settingsFrame:SetScale(scale) end
+end
+
+function SelectTab(index)
     activeTabIndex = index
     for i, entry in ipairs(AR.registeredModules) do
         if entry.contentFrame then
@@ -225,6 +286,142 @@ local function CreateNavItem(parent, entry, index, y)
     return item
 end
 
+-- ---------------------------------------------------------------------------
+-- Settings search: matches the visible labels of every tab
+-- ---------------------------------------------------------------------------
+
+local function StripEscapes(text)
+    text = text:gsub("|c%x%x%x%x%x%x%x%x", "")
+    text = text:gsub("|r", "")
+    text = text:gsub("|T.-|t", "")
+    text = text:gsub("|A.-|a", "")
+    return (text:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+-- Every label under a tab page. Hidden children (dropdown lists, collapsed panels) are skipped.
+local function CollectTexts(frame, out)
+    for _, region in ipairs({ frame:GetRegions() }) do
+        if region.GetText and region:IsObjectType("FontString") then
+            local text = region:GetText()
+            if type(text) == "string" and text ~= "" then out[#out + 1] = StripEscapes(text) end
+        end
+    end
+    for _, child in ipairs({ frame:GetChildren() }) do
+        if child:IsShown() then CollectTexts(child, out) end
+    end
+end
+
+local MAX_RESULTS = 8
+
+function AR:CreateSearch(window, closeBtn)
+    local UI = AR.UI
+
+    local box = UI.CreateFrame("EditBox", nil, window, "InputBoxTemplate")
+    box:SetSize(210, 24)
+    box:SetPoint("RIGHT", closeBtn, "LEFT", -10, 0)
+    box:SetAutoFocus(false)
+    box:SetMaxLetters(40)
+
+    local hint = box:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hint:SetPoint("LEFT", box, "LEFT", 8, 0)
+    hint:SetText("Search settings...")
+
+    local results = UI.CreateFrame("Frame", nil, window)
+    results:SetPoint("TOPRIGHT", box, "BOTTOMRIGHT", 0, -3)
+    results:SetWidth(380)
+    results:SetFrameLevel(window:GetFrameLevel() + 60)
+    UI.Surface(results, UI.Colors.popup, { 1, 1, 1, 0.14 })
+    results:EnableMouse(true)
+    results:Hide()
+
+    local rows, hits = {}, {}
+
+    local function Close()
+        results:Hide()
+        box:SetText("")
+        box:ClearFocus()
+    end
+
+    local function Pick(i)
+        local hit = hits[i]
+        if not hit then return end
+        Close()
+        SelectTab(hit.tab)
+    end
+
+    for i = 1, MAX_RESULTS do
+        local row = UI.CreateFrame("Button", nil, results)
+        row:SetHeight(24)
+        row:SetPoint("TOPLEFT", results, "TOPLEFT", 4, -4 - (i - 1) * 24)
+        row:SetPoint("TOPRIGHT", results, "TOPRIGHT", -4, -4 - (i - 1) * 24)
+        local hl = row:CreateTexture(nil, "HIGHLIGHT")
+        hl:SetAllPoints()
+        hl:SetColorTexture(1, 1, 1, 0.07)
+        row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        row.label:SetPoint("LEFT", row, "LEFT", 8, 0)
+        row.label:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+        row.label:SetJustifyH("LEFT")
+        row.label:SetWordWrap(false)
+        row:SetScript("OnClick", function() Pick(i) end)
+        rows[i] = row
+    end
+
+    local function Search()
+        local q = box:GetText():lower()
+        wipe(hits)
+        if q ~= "" then
+            for index, entry in ipairs(AR.registeredModules) do
+                if #hits >= MAX_RESULTS then break end
+                local tabName = entry.name
+                if tabName:lower():find(q, 1, true) then
+                    hits[#hits + 1] = { tab = index, text = "|cFFFFCC00" .. tabName .. "|r" }
+                end
+                local texts = {}
+                if entry.contentFrame then CollectTexts(entry.contentFrame, texts) end
+                local seen = {}
+                for _, text in ipairs(texts) do
+                    if #hits >= MAX_RESULTS then break end
+                    if not seen[text] and text:lower():find(q, 1, true) then
+                        seen[text] = true
+                        hits[#hits + 1] = { tab = index, text = "|cFFFFCC00" .. tabName .. "|r  " .. text }
+                    end
+                end
+            end
+        end
+        for i, row in ipairs(rows) do
+            local hit = hits[i]
+            row:SetShown(hit ~= nil)
+            if hit then row.label:SetText(hit.text) end
+        end
+        if #hits > 0 then
+            results:SetHeight(8 + #hits * 24)
+            results:Show()
+        elseif q ~= "" then
+            rows[1]:Show()
+            rows[1].label:SetText("No matching settings")
+            results:SetHeight(32)
+            results:Show()
+        else
+            results:Hide()
+        end
+    end
+
+    local debounced = AR.Util.Debounce(0.2, Search)
+    box:SetScript("OnTextChanged", function(self)
+        hint:SetShown(self:GetText() == "")
+        debounced()
+    end)
+    box:SetScript("OnEnterPressed", function() Search(); Pick(1) end)
+    box:SetScript("OnEscapePressed", Close)
+    window:HookScript("OnHide", function() Close() end)
+end
+
+function AR:OpenTab(index)
+    self:CreateSettingsWindow()
+    settingsFrame:Show()
+    SelectTab(index)
+end
+
 function AR:CreateSettingsWindow()
     if settingsFrame then return settingsFrame end
     local UI = AR.UI
@@ -233,6 +430,7 @@ function AR:CreateSettingsWindow()
     local f = UI.CreateFrame("Frame", "AndeRemindersSettings", UIParent)
     f:SetSize(WINDOW_W, WINDOW_H)
     f:SetPoint("CENTER")
+    f:SetScale(AR.root.ui.scale or 1)
     f:SetMovable(true)
     f:SetClampedToScreen(true)
     f:EnableMouse(true)
@@ -324,6 +522,8 @@ function AR:CreateSettingsWindow()
     closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -9)
     closeBtn:SetScript("OnClick", function() f:Hide() end)
 
+    AR:CreateSearch(f, closeBtn)
+
     local topDiv = f:CreateTexture(nil, "ARTWORK")
     topDiv:SetHeight(1)
     topDiv:SetColorTexture(unpack(C.border))
@@ -381,23 +581,36 @@ end)
 
 local function PrintHelp()
     AR.Util.Print("commands:")
-    print("  /ar            toggle the settings window")
-    print("  /ar anchors    show / hide the draggable anchor frames")
-    print("  /ar reset      put every anchor back at its default position")
-    print("  /ar unsnooze   show snoozed alerts again")
+    print("  /ar                 toggle the settings window")
+    print("  /ar <tab>           open a settings tab (general, gear, enchants, talents, bossmods...)")
+    print("  /ar check           run every check now and print the status")
+    print("  /ar test            show an example of every alert")
+    print("  /ar anchors         show / hide the draggable anchor frames")
+    print("  /ar reset           put every anchor back at its default position")
+    print("  /ar unsnooze        show snoozed alerts again")
+    print("  /ar profile [name]  show or switch this character's profile (reloads the UI)")
+    print("  /ar gems            list the socket / gem counts the gem check sees")
+    print("  /arbm list          list BossMods entries and their trigger types")
+    print("  /arbm trigger       fire a 10s test timer to see which entries match")
 end
 
 SLASH_ANDEREMINDERS1 = "/ar"
 SLASH_ANDEREMINDERS2 = "/andereminders"
 SlashCmdList["ANDEREMINDERS"] = function(msg)
-    local cmd = (msg or ""):match("^%s*(.-)%s*$"):lower()
-    if cmd == "" then
+    msg = (msg or ""):match("^%s*(.-)%s*$")
+    local cmd, rest = msg:match("^(%S*)%s*(.-)$")
+    cmd = cmd:lower()
+    if msg == "" then
         AR:ToggleSettings()
     elseif cmd == "anchors" then
         AR:ToggleAnchors()
     elseif cmd == "reset" then
         AR:ResetAnchors()
         AR.Util.Print("anchors reset to their default positions.")
+    elseif cmd == "check" then
+        if AR.RunAllChecks then AR:RunAllChecks(true) end
+    elseif cmd == "test" then
+        if AR.ShowTestAlerts then AR:ShowTestAlerts() end
     elseif cmd == "gems" then
         for _, entry in ipairs(AR.registeredModules) do
             if entry.module.DebugGems then entry.module:DebugGems() end
@@ -405,7 +618,27 @@ SlashCmdList["ANDEREMINDERS"] = function(msg)
     elseif cmd == "unsnooze" then
         AR.UI.UnsnoozeAlerts()
         AR.Util.Print("snoozed alerts will show again at the next check.")
+    elseif cmd == "profile" then
+        if rest == "" then
+            AR.Util.Print("profile: " .. AR.profileName .. "  (available: " .. table.concat(AR:GetProfileNames(), ", ") .. ")")
+        else
+            local target
+            for _, name in ipairs(AR:GetProfileNames()) do
+                if name:lower() == rest:lower() then target = name end
+            end
+            if target then AR:SwitchProfile(target) else AR.Util.Print("no profile named \"" .. rest .. "\".") end
+        end
+    elseif cmd == "help" then
+        PrintHelp()
     else
+        -- "/ar gear", "/ar world markers": open the tab whose name starts with the text.
+        local wanted = msg:lower()
+        for index, entry in ipairs(AR.registeredModules) do
+            if entry.name:lower():sub(1, #wanted) == wanted then
+                AR:OpenTab(index)
+                return
+            end
+        end
         PrintHelp()
     end
 end

@@ -118,6 +118,12 @@ function EncounterModule:ShowCombatText(kind)
     end)
 end
 
+-- Example for /ar test: +Combat, then -Combat a moment later.
+function EncounterModule:TestAlert()
+    self:ShowCombatText("enter")
+    C_Timer.After(1.2, function() self:ShowCombatText("leave") end)
+end
+
 -- Stub so the module registry's RunCheck contract is satisfied.
 function EncounterModule:RunCheck() end
 
@@ -282,6 +288,17 @@ function EncounterModule:BuildUI(parent, db)
         function(name) db.encounter.combatText.fontName = name end,
         { kind = "font", maxHeight = 300 })
     fontDropdown:SetPoint("LEFT", fontLabel, "RIGHT", 8, 0)
+
+    local combatHint = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    combatHint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 26, y - 30)
+    combatHint:SetText("Off by default. Flashes +Combat when you enter combat and -Combat when you leave.")
+
+    local previewEnter = AR.UI.Button(parent, "Preview +Combat", 130, 22)
+    previewEnter:SetPoint("TOPLEFT", parent, "TOPLEFT", 580, y - 26)
+    previewEnter:SetScript("OnClick", function() EncounterModule:ShowCombatText("enter") end)
+    local previewLeave = AR.UI.Button(parent, "Preview -Combat", 130, 22)
+    previewLeave:SetPoint("LEFT", previewEnter, "RIGHT", 8, 0)
+    previewLeave:SetScript("OnClick", function() EncounterModule:ShowCombatText("leave") end)
 
     y = y - 44
 

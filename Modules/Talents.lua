@@ -43,6 +43,7 @@ for _, scope in ipairs(SCOPES) do SCOPE_BY_KEY[scope.key] = scope end
 
 function TalentModule:InitDB(db)
     if not db.talents then db.talents = {} end
+    if db.talents.enabled == nil then db.talents.enabled = true end
     if not db.talents.checks then db.talents.checks = {} end
     if not db.talents.rules then db.talents.rules = {} end  -- expected loadout per content, see SCOPES
     if db.talents.checks.showActiveBuild == nil then db.talents.checks.showActiveBuild = true end
@@ -184,6 +185,7 @@ function TalentModule:RunCheck(isReadyCheck)
     if InCombatLockdown() then return end
     if not isReadyCheck then return end
     local db = AR.db
+    if not db.talents.enabled then return end
 
     local name, icon = GetActiveLoadoutInfo()
     local expected = self:GetExpectedLoadout()
@@ -195,6 +197,21 @@ function TalentModule:RunCheck(isReadyCheck)
     elseif db.talents.checks.showActiveBuild then
         self:ShowBuildText(name or "unknown talent loadout", icon)
     end
+end
+
+-- Example warning for the Preview button and /ar test.
+function TalentModule:TestAlert()
+    self:ShowBuildText("Wrong talent loadout!\nSwitch to: Example Loadout\n(active: Current Loadout)", nil, { 1, 0.25, 0.25 })
+end
+
+-- Dashboard line: text, ok.
+function TalentModule:GetStatus()
+    local name = GetActiveLoadoutInfo()
+    local expected = self:GetExpectedLoadout()
+    if expected and expected ~= name then
+        return "Expected " .. expected .. ", active " .. (name or "unknown"), false
+    end
+    return "Active: " .. (name or "unknown") .. (expected and "  (matches your rule)" or ""), true
 end
 
 -- ---------------------------------------------------------------------------
@@ -328,6 +345,12 @@ function TalentModule:BuildUI(parent, db)
     previewBtn:SetSize(110, 24)
     previewBtn:SetPoint("LEFT", sizeInput, "RIGHT", 20, 0)
     previewBtn:SetText("Preview")
+
+    local warnBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    warnBtn:SetSize(130, 24)
+    warnBtn:SetPoint("LEFT", previewBtn, "RIGHT", 8, 0)
+    warnBtn:SetText("Preview warning")
+    warnBtn:SetScript("OnClick", function() TalentModule:TestAlert() end)
 
     local previewing = false
 

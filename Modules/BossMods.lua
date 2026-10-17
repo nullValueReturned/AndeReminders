@@ -134,10 +134,18 @@ local EXPORT_PREFIX = "ARBM1:" -- format tag; also keeps the string out of
 
 local ENTRY_EXPORT_SKIP = { id = true, groupId = true, children = true }
 
+-- Entries hold nested tables (conditions), so a copy must not share them with the original.
+local function DeepCopy(v)
+    if type(v) ~= "table" then return v end
+    local out = {}
+    for k, x in pairs(v) do out[k] = DeepCopy(x) end
+    return out
+end
+
 local function EntrySnapshot(e)
     local snap = {}
     for k, v in pairs(e) do
-        if not ENTRY_EXPORT_SKIP[k] then snap[k] = v end
+        if not ENTRY_EXPORT_SKIP[k] then snap[k] = DeepCopy(v) end
     end
     return snap
 end
@@ -211,6 +219,59 @@ local function ImportPayload(payload)
 end
 
 -- =============================================================================
+-- Starter templates
+-- =============================================================================
+
+-- A template is a set of overrides applied on top of NewEntry's defaults (EDEFS), so every
+-- entry it creates carries the full current schema. Keys that EDEFS does not know are ignored.
+
+local function DefaultAlertSound()
+    local list = GetSoundList()
+    for _, want in ipairs({ "Raid Warning", "RaidWarning", "Alarm Clock" }) do
+        for _, n in ipairs(list) do if n == want then return n end end
+    end
+    return list[1]
+end
+
+local TEMPLATES = {
+    { label = "Tank swap icon", etype = "icon",
+      desc  = "Icon + message on a boss-mod announce, tanks only. Set the message/spell filter.",
+      set   = { name = "Tank Swap", triggerType = "announce", annText = "Taunt", annDuration = 6,
+                iconSize = 48, fontSize = 16, textPosition = "BOTTOM", displayText = "%m",
+                iconSwipe = true, loadRole = "TANK", anchorY = 150 } },
+    { label = "Soak / mechanic progress bar", etype = "bar",
+      desc  = "Bar on a boss-mod timer that only appears when 5s remain.",
+      set   = { name = "Soak Bar", triggerType = "timer", tmrRemaining = "5", displayText = "%m",
+                barWidth = 240, barHeight = 24, bcR = 1, bcG = 0.6, bcB = 0.1, anchorY = 100 } },
+    { label = "Big warning text", etype = "text",
+      desc  = "Large red text on an announce, with a pixel glow and an alert sound.",
+      set   = { name = "Big Warning", triggerType = "announce", annDuration = 4, fontSize = 36,
+                tcR = 1, tcG = 0.25, tcB = 0.2, displayText = "%m", anchorY = 250 },
+      conditions = function()
+          return {
+              { trigger = "show", action = "glow",  glowType = "pixel", timeOp = "lt", timeVal = 5 },
+              { trigger = "show", action = "sound", soundName = DefaultAlertSound(), timeOp = "lt", timeVal = 5 },
+          }
+      end },
+    { label = "Raid ability group", etype = "group",
+      desc  = "Empty group that stacks its entries downward from a top anchor.",
+      set   = { name = "Raid Abilities", growthDir = "DOWN", spacing = 6, anchorPoint = "TOP",
+                anchorX = -350, anchorY = 150 } },
+}
+
+-- Creates a normal, fully editable top-level entry from a template.
+local function CreateFromTemplate(tpl)
+    local db = AR.db.bossmods
+    local e = NewEntry(tpl.etype)
+    for k, v in pairs(tpl.set) do
+        if EDEFS[k] ~= nil then e[k] = v end
+    end
+    if tpl.conditions then e.conditions = tpl.conditions() end
+    table.insert(db.topLevel, 1, e.id)
+    return e
+end
+
+-- =============================================================================
 -- Forward declarations (mutual recursion)
 -- =============================================================================
 
@@ -233,19 +294,37 @@ local schedShows        = {}  -- [entryId] = C_Timer handle
 local groupActiveKids   = {}  -- [groupId] = ordered list of visible child ids
 local condFired         = {}  -- [entryId] = { [condIdx] = true }  reset on ShowEntryFrame
 local condCleanup       = {}  -- [entryId] = list of cleanup fns    called on HideEntryFrame
+local secretHits        = {}  -- [entryId] = true once it matched a message whose text / spell id the game hid
+local secretNotify            -- set by BuildUI: refreshes the list marker when a new hit is recorded
+local testState         = {}  -- [entryId] = { timer, onEnd } while the editor's live test is running
 
 -- Forgets everything tracked for a deleted entry, so a pending timer (whose closure still
 -- holds the entry) cannot bring a deleted entry's frame back.
 ClearEntryRuntime = function(id)
+    local test = testState[id]
+    if test then
+        testState[id] = nil
+        test.timer:Cancel()
+        if test.onEnd then test.onEnd(id) end
+    end
     if annTimers[id]  then annTimers[id]:Cancel();  annTimers[id]  = nil end
     if schedShows[id] then schedShows[id]:Cancel(); schedShows[id] = nil end
     if condCleanup[id] then
         for _, fn in ipairs(condCleanup[id]) do fn() end  -- stop glows / reset scale on the old frame
     end
     activeBars[id], condFired[id], condCleanup[id], groupActiveKids[id] = nil, nil, nil, nil
+    secretHits[id] = nil
 end
 
 local function GetStage() return BigWigsLoader and bwStage or dbmStage end
+
+-- Called when an entry's trigger matched a message the game marked secret (text or spell id
+-- unreadable, see the Safe* helpers below). Only a flag is recorded; no secret is ever read.
+local function NoteSecret(id)
+    if secretHits[id] then return end
+    secretHits[id] = true
+    if secretNotify then secretNotify(id) end
+end
 
 -- =============================================================================
 -- Matching helpers
@@ -317,6 +396,7 @@ HandleAnnounce = function(data)
     local db = AR.db; if not db or not db.bossmods then return end
     for id, e in pairs(db.bossmods.entries) do
         if MatchAnn(e, data) and PassesLoad(e) then
+            if data.secret then NoteSecret(id) end
             local dur = (e.annDuration and e.annDuration > 0) and e.annDuration or 5
             -- Build a per-entry data copy with duration/expirationTime so bar frames
             -- can count down using annDuration and %t resolves correctly.
@@ -346,6 +426,7 @@ HandleTimerStart = function(data)
     local db = AR.db; if not db or not db.bossmods then return end
     for id, e in pairs(db.bossmods.entries) do
         if MatchTmr(e, data) and PassesLoad(e) then
+            if data.secret then NoteSecret(id) end
             local rem = tonumber(e.tmrRemaining) or 0
             activeBars[id] = data
             if rem > 0 and data.duration > rem then
@@ -436,11 +517,12 @@ end
 
 local function OnBWTimer(event, addon, spellId, duration, _, text, count, icon)
     local now = GetTime()
+    local secret = Util.IsSecret(text) or Util.IsSecret(spellId)  -- flag only; neither value is read
     text     = SafeText(text)
     duration = Util.SafeNumber(duration) or 0
     local d = { source="bw", spellId=SafeId(spellId), text=text,
         duration=duration, expirationTime=now+duration,
-        icon=SafeIcon(icon), count=SafeCount(count) }
+        icon=SafeIcon(icon), count=SafeCount(count), secret=secret }
     bwBars[text] = d
     HandleTimerStart(d)
 end
@@ -459,10 +541,11 @@ end
 
 local function OnBWMessage(_, _, spellId, text, _, icon)
     -- event, addon, spellId, text, type, icon
+    local secret = Util.IsSecret(text) or Util.IsSecret(spellId)
     text = SafeText(text)
     local count = text:match("%((%d+)%)") or text:match("（(%d+)）") or "0"
     HandleAnnounce({ source="bw", spellId=SafeId(spellId),
-        text=text, icon=SafeIcon(icon), count=count })
+        text=text, icon=SafeIcon(icon), count=count, secret=secret })
 end
 
 local function OnBWSetStage(_, _, stage) bwStage = SafeStage(stage) end
@@ -499,7 +582,8 @@ local function RegisterDBM()
     dbmReg = true
     DBM:RegisterCallback("DBM_Announce", function(_, msg, icon, _, spellId, _, _, count)
         HandleAnnounce({ source="dbm", spellId=SafeId(spellId),
-            text=SafeText(msg), icon=SafeIcon(icon), count=SafeCount(count) })
+            text=SafeText(msg), icon=SafeIcon(icon), count=SafeCount(count),
+            secret=Util.IsSecret(msg) or Util.IsSecret(spellId) })
     end)
     DBM:RegisterCallback("DBM_TimerBegin", function(_, timerId, msg, dur, icon, _,
         spellId, _, _, _, _, _, _, count)
@@ -508,7 +592,8 @@ local function RegisterDBM()
         dur = Util.SafeNumber(dur) or 0
         local d = { source="dbm", spellId=SafeId(spellId), text=SafeText(msg),
             timerId=timerId, duration=dur, expirationTime=now+dur,
-            icon=SafeIcon(icon), count=SafeCount(count) }
+            icon=SafeIcon(icon), count=SafeCount(count),
+            secret=Util.IsSecret(msg) or Util.IsSecret(spellId) }
         dbmBars[timerId] = d; HandleTimerStart(d)
     end)
     DBM:RegisterCallback("DBM_TimerStop", function(_, timerId)
@@ -843,6 +928,10 @@ RefreshGroupLayout = function(gid)
     local g  = db.bossmods.entries[gid]; if not g or g.type ~= "group" then return end
     local gf = entryFrames[gid];         if not gf then return end
     local active = groupActiveKids[gid] or {}
+    -- Stack in the order the user arranged the children, not in activation order.
+    local order = {}
+    for i, cid in ipairs(g.children) do order[cid] = i end
+    table.sort(active, function(a, b) return (order[a] or math.huge) < (order[b] or math.huge) end)
     local dir = g.growthDir or "DOWN"; local sp = g.spacing or 4
     local prev = nil
     for _, cid in ipairs(active) do
@@ -1002,6 +1091,153 @@ HideEntryFrame = function(id)
     condFired[id] = nil
     local f = entryFrames[id]; if f then f:Hide() end
     RemoveFromGroup(id)
+end
+
+-- =============================================================================
+-- Entry organisation: duplicate, reorder, move between groups
+-- =============================================================================
+
+-- The id list an entry lives in: its group's children, or the top level.
+local function EntryList(db, e)
+    if e.groupId then
+        local pg = db.entries[e.groupId]
+        return pg and pg.children
+    end
+    return db.topLevel
+end
+
+local function IndexOf(list, id)
+    for i, v in ipairs(list) do if v == id then return i end end
+end
+
+-- Swaps the entry with its neighbour (dir = -1 up, +1 down). A group's child order is also
+-- the order its live frames stack in, so the group layout is refreshed too.
+local function MoveEntryInList(e, dir)
+    local list = EntryList(AR.db.bossmods, e); if not list then return false end
+    local i = IndexOf(list, e.id)
+    if not i then return false end
+    local j = i + dir
+    if j < 1 or j > #list then return false end
+    list[i], list[j] = list[j], list[i]
+    if e.groupId then RefreshGroupLayout(e.groupId) end
+    return true
+end
+
+-- Moves an entry into group gid, or out to the top level when gid is nil. A currently visible
+-- entry is re-stacked / re-anchored immediately.
+local function MoveEntryToGroup(e, gid)
+    local db = AR.db.bossmods
+    if e.type == "group" or e.groupId == gid then return false end
+    local target
+    if gid then
+        target = db.entries[gid]
+        if not target or target.type ~= "group" then return false end
+    end
+    local f    = entryFrames[e.id]
+    local live = f and f:IsShown()
+    RemoveFromGroup(e.id)  -- needs the old groupId: drops it from the old group's live stack
+    local oldGid  = e.groupId
+    local oldList = EntryList(db, e)
+    if oldList then
+        local i = IndexOf(oldList, e.id)
+        if i then table.remove(oldList, i) end
+    end
+    e.groupId = gid
+    if target then
+        table.insert(target.children, e.id)
+    else
+        -- Land just below the group it left, so it stays where the user was looking.
+        local gi = oldGid and IndexOf(db.topLevel, oldGid)
+        table.insert(db.topLevel, gi and gi + 1 or #db.topLevel + 1, e.id)
+    end
+    if live then
+        if gid then
+            AddToGroup(e); RefreshGroupLayout(gid)
+        else
+            f:ClearAllPoints()
+            f:SetPoint(e.anchorPoint or "CENTER", UIParent, "CENTER", e.anchorX or 0, e.anchorY or 200)
+        end
+    end
+    return true
+end
+
+-- Deep copy via the export snapshot (fresh ids, nested tables not shared), placed right after
+-- the original in the same group. A group is copied together with its children.
+local function DuplicateEntry(id)
+    local db  = AR.db.bossmods
+    local src = db.entries[id]; if not src then return nil end
+    local newId = ImportPayload(BuildExportPayload(id))  -- lands at the top of the top level
+    local copy  = db.entries[newId]
+    copy.name = (src.name or "Entry") .. " (copy)"
+    local at = IndexOf(db.topLevel, newId)
+    if at then table.remove(db.topLevel, at) end
+    local list = EntryList(db, src)
+    if not list then list = db.topLevel end
+    copy.groupId = (list ~= db.topLevel) and src.groupId or nil
+    table.insert(list, (IndexOf(list, src.id) or #list) + 1, newId)
+    return copy
+end
+
+-- =============================================================================
+-- Per-entry live test (editor "Test this entry")
+-- =============================================================================
+
+local TEST_SECONDS = 8
+
+local function IsEntryTesting(id) return testState[id] ~= nil end
+
+local function StopEntryTest(id)
+    local t = testState[id]; if not t then return end
+    testState[id] = nil
+    t.timer:Cancel()
+    -- A real trigger may have taken the frame over meanwhile: leave that one showing.
+    if not annTimers[id] and not activeBars[id] then HideEntryFrame(id) end
+    if t.onEnd then t.onEnd(id) end
+end
+
+local function StopAllEntryTests()
+    for id in pairs(testState) do StopEntryTest(id) end
+end
+
+-- Plausible stand-in for a boss-mod payload, built from the entry's own filters. Returns the
+-- data table and how long the test runs (a "show when less than N s" entry counts down from N).
+local function TestData(e)
+    local isTmr = e.triggerType == "timer"
+    local spell = (isTmr and e.tmrSpellId or e.annSpellId) or ""
+    local text  = (isTmr and e.tmrText    or e.annText)    or ""
+    local op    =  isTmr and e.tmrTextOp  or e.annTextOp
+    local count = (isTmr and e.tmrCount   or e.annCount)   or ""
+    if op == "match" or text == "" then text = e.name or "Test" end  -- a pattern is not literal text
+    if count == "" then count = "1" end
+    local secs = TEST_SECONDS
+    if isTmr then
+        local rem = tonumber(e.tmrRemaining)
+        if rem and rem > 0 and rem < secs then secs = rem end
+    end
+    local icon = 134400
+    local sid  = tonumber(spell)
+    if sid and sid > 0 then icon = C_Spell.GetSpellTexture(sid) or icon end
+    local now = GetTime()
+    return { source = "test", spellId = spell, text = text, count = count, icon = icon,
+             duration = secs, expirationTime = now + secs }, secs
+end
+
+-- Shows the entry through the normal display path (ShowEntryFrame), ignoring boss / zone /
+-- load conditions, then hides it again. Touches neither activeBars nor schedShows, so it
+-- cannot disturb /arbm trigger or real boss-mod timers.
+local function StartEntryTest(e, onEnd)
+    if not e or e.type == "group" then return false end
+    local id = e.id
+    if annTimers[id] or activeBars[id] then return false, "it is currently showing from a real trigger" end
+    local data, secs = TestData(e)
+    -- Fresh activation: stop effects (glow / scale) the editor preview left running.
+    if condCleanup[id] then
+        for _, fn in ipairs(condCleanup[id]) do fn() end
+        condCleanup[id] = nil
+    end
+    ShowEntryFrame(e, data)
+    testState[id] = { onEnd = onEnd, timer = C_Timer.NewTimer(secs, function() StopEntryTest(id) end) }
+    return true
 end
 
 -- =============================================================================
@@ -1317,6 +1553,158 @@ local function ShowImportPopup(onImport)
 end
 
 -- =============================================================================
+-- Editor widgets kept outside BuildUI (it is already close to Lua's local limits)
+-- =============================================================================
+
+local SECRET_TIP = "Matched, but boss-mod text was hidden by the game, so text filters/templates may not apply."
+
+local function Tip(btn, text)
+    btn:SetScript("OnEnter", function(s)
+        GameTooltip:SetOwner(s, "ANCHOR_BOTTOM")
+        GameTooltip:SetText(text, 1, 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+end
+
+-- Small popup listing "no group" plus every group; onPick(gid or nil).
+local groupPicker
+local function ShowGroupPicker(anchor, e, onPick)
+    local db = AR.db.bossmods
+    if not groupPicker then
+        local capture = CreateFrame("Frame", nil, UIParent)
+        capture:SetAllPoints(UIParent); capture:EnableMouse(true)
+        capture:SetFrameStrata("FULLSCREEN"); capture:Hide()
+        local popup = CreateFrame("Frame", nil, UIParent, "BackdropTemplate")
+        popup:SetFrameStrata("FULLSCREEN_DIALOG"); popup:SetWidth(210)
+        popup:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+        popup:SetBackdropColor(0.070, 0.075, 0.090, 0.99); popup:SetBackdropBorderColor(1, 1, 1, 0.14)
+        popup:Hide()
+        capture:SetScript("OnMouseDown", function() popup:Hide(); capture:Hide() end)
+        groupPicker = { capture = capture, popup = popup, rows = {} }
+    end
+    local gp = groupPicker
+    local opts = { { label = "(No group - top level)", gid = false } }
+    local groups = {}
+    for _, ge in pairs(db.entries) do
+        if ge.type == "group" then groups[#groups + 1] = ge end
+    end
+    table.sort(groups, function(a, b) return (a.name or "") < (b.name or "") end)
+    for _, ge in ipairs(groups) do opts[#opts + 1] = { label = ge.name or "?", gid = ge.id } end
+
+    local ROW = 22
+    for i, opt in ipairs(opts) do
+        local row = gp.rows[i]
+        if not row then
+            row = CreateFrame("Button", nil, gp.popup)
+            row:SetHeight(ROW)
+            row:SetPoint("TOPLEFT",  gp.popup, "TOPLEFT",  2, -(i - 1) * ROW - 2)
+            row:SetPoint("TOPRIGHT", gp.popup, "TOPRIGHT", -2, -(i - 1) * ROW - 2)
+            local hl = row:CreateTexture(nil, "HIGHLIGHT"); hl:SetAllPoints(); hl:SetColorTexture(1, 1, 1, 0.1)
+            row.lbl = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            row.lbl:SetPoint("LEFT", row, "LEFT", 8, 0); row.lbl:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+            row.lbl:SetJustifyH("LEFT"); row.lbl:SetWordWrap(false)
+            gp.rows[i] = row
+        end
+        local isCurrent = (opt.gid or nil) == e.groupId
+        row.lbl:SetText(opt.label .. (isCurrent and "  (current)" or ""))
+        if isCurrent then
+            row.lbl:SetTextColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b)
+        else
+            row.lbl:SetTextColor(1, 1, 1)
+        end
+        local gid = opt.gid or nil
+        row:SetScript("OnClick", function()
+            gp.popup:Hide(); gp.capture:Hide()
+            onPick(gid)
+        end)
+        row:Show()
+    end
+    for i = #opts + 1, #gp.rows do gp.rows[i]:Hide() end
+    gp.popup:SetHeight(#opts * ROW + 4)
+    gp.popup:ClearAllPoints()
+    gp.popup:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+    gp.capture:Show(); gp.popup:Show()
+end
+
+-- Right-panel list of starter templates; onPick(template).
+local function BuildTemplatePicker(rp, onPick)
+    local f = CreateFrame("Frame", nil, rp)
+    f:SetAllPoints(rp); f:Hide()
+    local hdr = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    hdr:SetPoint("TOP", f, "TOP", 0, -20); hdr:SetText("New From Template")
+    local sub = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    sub:SetPoint("TOP", hdr, "BOTTOM", 0, -6)
+    sub:SetText("Creates a normal entry you can edit freely."); sub:SetTextColor(0.6, 0.6, 0.6)
+    for i, tpl in ipairs(TEMPLATES) do
+        local tb = CreateFrame("Button", nil, f, "BackdropTemplate")
+        tb:SetSize(520, 46)
+        tb:SetPoint("TOP", f, "TOP", 0, -70 - (i - 1) * 56)
+        tb:SetBackdrop({ bgFile="Interface/Buttons/WHITE8x8", edgeFile="Interface/Buttons/WHITE8x8", edgeSize=1 })
+        tb:SetBackdropColor(0.095, 0.10, 0.118, 1); tb:SetBackdropBorderColor(1, 1, 1, 0.1)
+        local tl = tb:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        tl:SetPoint("TOPLEFT", tb, "TOPLEFT", 14, -8); tl:SetText(tpl.label)
+        local td = tb:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        td:SetPoint("BOTTOMLEFT", tb, "BOTTOMLEFT", 14, 8); td:SetText(tpl.desc); td:SetTextColor(0.7, 0.7, 0.7)
+        tb:SetScript("OnEnter", function(s) s:SetBackdropColor(0.14, 0.15, 0.18, 1); s:SetBackdropBorderColor(AR.UI.accent.r, AR.UI.accent.g, AR.UI.accent.b, 0.9) end)
+        tb:SetScript("OnLeave", function(s) s:SetBackdropColor(0.095, 0.10, 0.118, 1); s:SetBackdropBorderColor(1, 1, 1, 0.1) end)
+        tb:SetScript("OnClick", function() onPick(tpl) end)
+    end
+    return f
+end
+
+-- Duplicate / Test / secret-text marker next to the name row, reorder + move controls on the
+-- sub-tab row, and the secret-text line on the Trigger tab. Click handlers are wired by BuildUI.
+local function BuildEditorToolbar(sp, delBtn, trigCont)
+    local tb = {}
+    local function Btn(w, text, point, rel, relPoint, x, y)
+        local b = CreateFrame("Button", nil, sp, "UIPanelButtonTemplate")
+        b:SetSize(w, 20); b:SetPoint(point, rel, relPoint, x, y); b:SetText(text)
+        return b
+    end
+    tb.dup  = Btn(74,  "Duplicate",       "LEFT", delBtn,  "RIGHT", 4, 0)
+    tb.test = Btn(104, "Test this entry", "LEFT", tb.dup,  "RIGHT", 4, 0)
+    tb.up   = Btn(34,  "Up",   "TOPLEFT", sp, "TOPLEFT", 356, -37)
+    tb.down = Btn(40,  "Down", "LEFT", tb.up, "RIGHT", 2, 0)
+    tb.move = Btn(130, "Move to group...", "LEFT", tb.down, "RIGHT", 4, 0)
+    Tip(tb.dup,  "Copy this entry (same group) and select the copy.")
+    Tip(tb.test, "Show this entry for a few seconds with fake data, ignoring load conditions. Click again to stop.")
+    Tip(tb.up,   "Move up in the list.")
+    Tip(tb.down, "Move down in the list.")
+    Tip(tb.move, "Move into a group, or back out to the top level.")
+
+    tb.warn = CreateFrame("Button", nil, sp)
+    tb.warn:SetSize(20, 20); tb.warn:SetPoint("LEFT", tb.test, "RIGHT", 6, 0)
+    local wt = tb.warn:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    wt:SetAllPoints(); wt:SetText("!"); wt:SetTextColor(1, 0.6, 0.1)
+    Tip(tb.warn, SECRET_TIP)
+    tb.warn:Hide()
+
+    tb.warnLine = trigCont:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    tb.warnLine:SetPoint("TOPLEFT", trigCont, "TOPLEFT", 170, -8)
+    tb.warnLine:SetWidth(520); tb.warnLine:SetJustifyH("LEFT"); tb.warnLine:SetWordWrap(true)
+    tb.warnLine:SetTextColor(1, 0.6, 0.1); tb.warnLine:SetText("(!) " .. SECRET_TIP); tb.warnLine:Hide()
+
+    local function SetEnabled(b, on) if on then b:Enable() else b:Disable() end end
+
+    -- Refresh enabled / visible state for the selected entry (nil = nothing selected).
+    function tb.Update(e)
+        local isGroup = e and e.type == "group"
+        local list = e and EntryList(AR.db.bossmods, e)
+        local idx  = list and IndexOf(list, e.id)
+        SetEnabled(tb.up,   idx ~= nil and idx > 1)
+        SetEnabled(tb.down, idx ~= nil and idx < #list)
+        tb.move:SetShown(e ~= nil and not isGroup)
+        tb.test:SetShown(e ~= nil and not isGroup)
+        tb.test:SetText(e and IsEntryTesting(e.id) and "Stop test" or "Test this entry")
+        local secret = e ~= nil and secretHits[e.id] == true
+        tb.warn:SetShown(secret)
+        tb.warnLine:SetShown(secret)
+    end
+    return tb
+end
+
+-- =============================================================================
 -- BuildUI
 -- =============================================================================
 
@@ -1327,6 +1715,7 @@ function BossModModule:BuildUI(parent, db)
     local RefreshSidebar -- forward-declared
     local RefreshPreview -- forward-declared
     local ShowCtxMenu    -- forward-declared
+    local tplPicker      -- forward-declared: template list in the right panel
 
     local SB_W    = 220
     local ROW_H   = 44
@@ -1342,9 +1731,15 @@ function BossModModule:BuildUI(parent, db)
     sbBg:SetWidth(SB_W)
 
     local addBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-    addBtn:SetSize(SB_W - 10, 22)
+    addBtn:SetSize(SB_W - 10 - 88, 22)
     addBtn:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, -5)
     addBtn:SetText("+ Add New")
+
+    local tplBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    tplBtn:SetSize(84, 22)
+    tplBtn:SetPoint("LEFT", addBtn, "RIGHT", 4, 0)
+    tplBtn:SetText("Template...")
+    Tip(tplBtn, "New entry from a ready-made starter template.")
 
     local importBtn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
     importBtn:SetSize(SB_W - 10, 22)
@@ -1490,6 +1885,8 @@ function BossModModule:BuildUI(parent, db)
     local loadCont    = subScrollChilds[3]
     local condCont    = subScrollChilds[4]
 
+    local tb = BuildEditorToolbar(sp, delBtn, trigCont)
+
     -- =============================================
     -- Shared entry reference pointer
     -- =============================================
@@ -1538,7 +1935,7 @@ function BossModModule:BuildUI(parent, db)
         lbl:SetJustifyH("LEFT"); btn.lbl = lbl; btn:Hide()
         return btn
     end
-    local cmBtns = {}; for i=1,5  do cmBtns[i] = MakeMenuBtn(ctxMenu, i) end
+    local cmBtns = {}; for i=1,7  do cmBtns[i] = MakeMenuBtn(ctxMenu, i) end
     local smBtns = {}; for i=1,20 do smBtns[i] = MakeMenuBtn(ctxSub,  i) end
 
     -- =============================================
@@ -2048,12 +2445,7 @@ function BossModModule:BuildUI(parent, db)
                 local cid = cand.id
                 row:SetScript("OnClick", function()
                     if not ref.e or ref.e.type ~= "group" then return end
-                    cand.groupId = ref.e.id
-                    table.insert(ref.e.children, cid)
-                    -- Remove from topLevel
-                    for i, tid in ipairs(db.bossmods.topLevel) do
-                        if tid == cid then table.remove(db.bossmods.topLevel, i); break end
-                    end
+                    MoveEntryToGroup(cand, ref.e.id)
                     memberPickerPopup:Hide()
                     grpSec.Populate(ref.e)
                     RefreshSidebar()
@@ -2111,11 +2503,7 @@ function BossModModule:BuildUI(parent, db)
                     rmBtn:SetSize(60, mh); rmBtn:SetPoint("LEFT", mrow, "RIGHT", 4, 0); rmBtn:SetText("Remove")
                     local rcid = cid
                     rmBtn:SetScript("OnClick", function()
-                        ce.groupId = nil
-                        table.insert(db.bossmods.topLevel, rcid)
-                        for i, c2 in ipairs(e.children) do
-                            if c2 == rcid then table.remove(e.children, i); break end
-                        end
+                        MoveEntryToGroup(ce, nil)
                         grpSec.Populate(e)
                         RefreshSidebar()
                     end)
@@ -2722,12 +3110,14 @@ function BossModModule:BuildUI(parent, db)
     end
 
     SelectEntry = function(e)
+        if ref.e and ref.e ~= e and IsEntryTesting(ref.e.id) then StopEntryTest(ref.e.id) end
         HidePreview()
         ref.e = e
         if not e then
             sp:Hide(); placeholder:Show(); return
         end
-        typePicker:Hide(); placeholder:Hide(); sp:Show()
+        typePicker:Hide(); if tplPicker then tplPicker:Hide() end
+        placeholder:Hide(); sp:Show()
         nameEB:SetText(e.name or "")
 
         -- Display tab sections
@@ -2842,6 +3232,7 @@ function BossModModule:BuildUI(parent, db)
             condCont.Populate(e)
         end
         PickSub(isGroup and 1 or activeSub)
+        tb.Update(e)
     end
 
     -- =============================================
@@ -2886,19 +3277,29 @@ function BossModModule:BuildUI(parent, db)
                 r.icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
                 r.label = r:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                 r.label:SetPoint("TOPLEFT", r.icon, "TOPRIGHT", 4, -2)
-                r.label:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.label:SetPoint("RIGHT", r, "RIGHT", -18, 0)
                 r.label:SetJustifyH("LEFT")
                 r.typeLabel = r:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
                 r.typeLabel:SetPoint("BOTTOMLEFT", r.icon, "BOTTOMRIGHT", 4, 2)
-                r.typeLabel:SetPoint("RIGHT", r, "RIGHT", -4, 0)
+                r.typeLabel:SetPoint("RIGHT", r, "RIGHT", -18, 0)
                 r.typeLabel:SetJustifyH("LEFT")
                 r.typeLabel:SetTextColor(0.6, 0.6, 0.6)
+                -- Orange "!" when the entry matched a message whose text the game hid
+                r.warn = r:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+                r.warn:SetPoint("RIGHT", r, "RIGHT", -5, 0)
+                r.warn:SetText("!"); r.warn:SetTextColor(1, 0.6, 0.1); r.warn:Hide()
                 r:SetScript("OnEnter", function(s)
                     if not ref.e or ref.e.id ~= s.eid then
                         s:SetBackdropColor(0.12, 0.13, 0.16, 1)
                     end
+                    if secretHits[s.eid] then
+                        GameTooltip:SetOwner(s, "ANCHOR_RIGHT")
+                        GameTooltip:SetText(SECRET_TIP, 1, 0.6, 0.1, 1, true)
+                        GameTooltip:Show()
+                    end
                 end)
                 r:SetScript("OnLeave", function(s)
+                    GameTooltip:Hide()
                     if not ref.e or ref.e.id ~= s.eid then
                         s:SetBackdropColor(s.isGroup and 0.085 or 0.05, s.isGroup and 0.09 or 0.054, s.isGroup and 0.105 or 0.064, 1)
                     end
@@ -2926,6 +3327,7 @@ function BossModModule:BuildUI(parent, db)
             local namePfx = (e.type == "group") and (groupExpanded[e.id] and "[-] " or "[+] ") or ""
             r.label:SetText(namePfx .. (e.name or "?"))
             r.typeLabel:SetText(TYPE_LABELS[e.type] or "")
+            r.warn:SetShown(secretHits[e.id] == true)
             r:Show()
             if e.type == "group" then
                 r:SetScript("OnClick", function(_, btn)
@@ -2978,13 +3380,11 @@ function BossModModule:BuildUI(parent, db)
 
         local function doDuplicate()
             CloseCtx()
-            local copy = NewEntry(e.type, nil)
-            local SKIP = { id=true, groupId=true, children=true }
-            for k, v in pairs(e) do if not SKIP[k] then copy[k] = v end end
-            copy.name    = (e.name or "Entry") .. " (copy)"
-            copy.children = {}; copy.groupId = nil
-            table.insert(db.bossmods.topLevel, 1, copy.id)
-            RefreshSidebar()
+            local copy = DuplicateEntry(e.id)
+            if copy then
+                if copy.groupId then groupExpanded[copy.groupId] = true end
+                SelectEntry(copy); RefreshSidebar()
+            end
         end
 
         local function doExport()
@@ -3007,14 +3407,8 @@ function BossModModule:BuildUI(parent, db)
             if e.groupId then
                 defs[#defs + 1] = { text = "Remove from group", fn = function()
                     CloseCtx()
-                    local pg = db.bossmods.entries[e.groupId]
-                    if pg then
-                        for i, cid in ipairs(pg.children) do
-                            if cid == e.id then table.remove(pg.children, i); break end
-                        end
-                    end
-                    e.groupId = nil
-                    table.insert(db.bossmods.topLevel, e.id)
+                    MoveEntryToGroup(e, nil)
+                    if ref.e and ref.e.id == e.id then SelectEntry(e) end
                     RefreshSidebar()
                 end }
             else
@@ -3030,6 +3424,17 @@ function BossModModule:BuildUI(parent, db)
 
             defs[#defs + 1] = { text = "Delete", fn = doDelete }
         end
+
+        -- Reorder (inserted above the trailing Delete entry)
+        local function doMove(dir)
+            CloseCtx()
+            if MoveEntryInList(e, dir) then
+                RefreshSidebar()
+                if ref.e then tb.Update(ref.e) end
+            end
+        end
+        table.insert(defs, #defs, { text = "Move up",   fn = function() doMove(-1) end })
+        table.insert(defs, #defs, { text = "Move down", fn = function() doMove(1) end })
 
         -- Wire buttons --------------------------------------------------
         for i, def in ipairs(defs) do
@@ -3050,12 +3455,8 @@ function BossModModule:BuildUI(parent, db)
                         sb:SetScript("OnLeave", function(s) s.lbl:SetTextColor(1,1,1) end)
                         sb:SetScript("OnClick", function()
                             CloseCtx()
-                            for ti, tid in ipairs(db.bossmods.topLevel) do
-                                if tid == e.id then table.remove(db.bossmods.topLevel, ti); break end
-                            end
-                            e.groupId = gid
-                            local tg = db.bossmods.entries[gid]
-                            if tg then table.insert(tg.children, e.id) end
+                            MoveEntryToGroup(e, gid)
+                            if ref.e and ref.e.id == e.id then SelectEntry(e) end
                             RefreshSidebar()
                         end)
                         sb:Show()
@@ -3113,14 +3514,71 @@ function BossModModule:BuildUI(parent, db)
 
     addBtn:SetScript("OnClick", function()
         HidePreview(); ref.e = nil
-        sp:Hide(); placeholder:Hide(); typePicker:Show()
+        sp:Hide(); placeholder:Hide(); tplPicker:Hide(); typePicker:Show()
         RefreshSidebar()
     end)
+
+    tplPicker = BuildTemplatePicker(rp, function(tpl)
+        local e = CreateFromTemplate(tpl)
+        tplPicker:Hide()
+        SelectEntry(e)
+        RefreshSidebar()
+    end)
+    tplBtn:SetScript("OnClick", function()
+        HidePreview(); ref.e = nil
+        sp:Hide(); placeholder:Hide(); typePicker:Hide(); tplPicker:Show()
+        RefreshSidebar()
+    end)
+
+    tb.dup:SetScript("OnClick", function()
+        if not ref.e then return end
+        local copy = DuplicateEntry(ref.e.id)
+        if copy then
+            if copy.groupId then groupExpanded[copy.groupId] = true end
+            SelectEntry(copy); RefreshSidebar()
+        end
+    end)
+
+    tb.up:SetScript("OnClick", function()
+        if ref.e and MoveEntryInList(ref.e, -1) then RefreshSidebar(); tb.Update(ref.e) end
+    end)
+    tb.down:SetScript("OnClick", function()
+        if ref.e and MoveEntryInList(ref.e, 1) then RefreshSidebar(); tb.Update(ref.e) end
+    end)
+    tb.move:SetScript("OnClick", function()
+        local e = ref.e; if not e or e.type == "group" then return end
+        ShowGroupPicker(tb.move, e, function(gid)
+            if MoveEntryToGroup(e, gid) then
+                if gid then groupExpanded[gid] = true end
+                SelectEntry(e); RefreshSidebar()
+            end
+        end)
+    end)
+
+    tb.test:SetScript("OnClick", function()
+        local e = ref.e; if not e or e.type == "group" then return end
+        if IsEntryTesting(e.id) then StopEntryTest(e.id); return end
+        local ok, why = StartEntryTest(e, function(id)
+            if ref.e and ref.e.id == id then tb.Update(ref.e); RefreshPreview() end
+        end)
+        if ok then
+            tb.Update(e)
+        else
+            print("|cFFFF8800[AR BossMods]|r Cannot test '" .. tostring(e.name) .. "': " .. tostring(why))
+        end
+    end)
+
+    -- A new secret-text hit: refresh the list marker and the open editor.
+    secretNotify = function(id)
+        RefreshSidebar()
+        if ref.e and ref.e.id == id then tb.Update(ref.e) end
+    end
 
     -- Hide preview when settings window closes
     local win = parent:GetParent()
     if win then
         win:HookScript("OnHide", function()
+            StopAllEntryTests()
             HidePreview(); ref.e = nil
         end)
     end
@@ -3148,8 +3606,9 @@ SlashCmdList["ARBOSSMODS"] = function(msg)
         local count = 0
         for id, e in pairs(bm.entries) do
             count = count + 1
-            print(string.format("|cFF00AAFF[AR BossMods]|r #%d  %-20s  type=%-5s  trigger=%s",
-                id, tostring(e.name), tostring(e.type), tostring(e.triggerType)))
+            print(string.format("|cFF00AAFF[AR BossMods]|r #%d  %-20s  type=%-5s  trigger=%s%s",
+                id, tostring(e.name), tostring(e.type), tostring(e.triggerType),
+                secretHits[id] and "  |cFFFFAA00[matched hidden boss-mod text]|r" or ""))
         end
         if count == 0 then print("|cFF00AAFF[AR BossMods]|r No entries found.") end
 

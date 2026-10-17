@@ -93,6 +93,8 @@ function GearModule:InitDB(db)
     if not db.gear.notify then db.gear.notify = {} end
     if db.gear.notify.chat   == nil then db.gear.notify.chat   = true end
     if db.gear.notify.screen == nil then db.gear.notify.screen = true end
+    if db.gear.enabled == nil then db.gear.enabled = true end
+    if not db.gear.repairNotify then db.gear.repairNotify = {} end  -- sound / group-only / duration of the banner
     if not db.gear.ignored then db.gear.ignored = {} end  -- [issue key] = true, set from the alert
     if not db.gear.checks then db.gear.checks = {} end
     if db.gear.checks.weaponType    == nil then db.gear.checks.weaponType    = true end
@@ -105,7 +107,7 @@ function GearModule:InitDB(db)
 end
 
 function GearModule:ShowAlert(text, items)
-    gearAlert:Show(text, items)
+    gearAlert:Show(text, items, AR.db and AR.db.gear.notify)
 end
 
 -- ---------------------------------------------------------------------------
@@ -254,6 +256,23 @@ function GearModule:CheckLowDurability()
     return false
 end
 
+-- The banner's sound plays once per low-durability episode, and a banner that timed out
+-- (Options > Hide after) stays down until the gear has been repaired.
+local repairAnnounced, repairDismissed = false, false
+local repairTimer
+
+function GearModule:GetLowestDurability()
+    local lowest
+    for slot in pairs(SLOT_NAMES) do
+        local current, max = GetInventoryItemDurability(slot)
+        if current and max and max > 0 then
+            local pct = current / max * 100
+            if not lowest or pct < lowest then lowest = pct end
+        end
+    end
+    return lowest
+end
+
 function GearModule:RunDurabilityCheck()
     if not AR.db or not AR.db.gear then return end
     if InCombatLockdown() then return end
@@ -264,30 +283,46 @@ function GearModule:RunDurabilityCheck()
         return
     end
 
+    local notify = AR.db.gear.repairNotify
     local wf = GetDurabilityWarnFrame()
-    if self:CheckLowDurability() then
-        wf:Show()
-    else
+    if not self:CheckLowDurability() then
+        repairAnnounced, repairDismissed = false, false
+        if repairTimer then repairTimer:Cancel(); repairTimer = nil end
         wf:Hide()
-    end
-end
-
--- silent: skip the chat lines (used when re-checking right after an Ignore click).
-function GearModule:RunCheck(silent)
-    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
-    if not AR.db or not AR.db.gear then return end
-    if InCombatLockdown() then
-        needsRecheck = true
         return
     end
-    needsRecheck = false
-    local db = AR.db
+    if repairDismissed or not AR.UI.ShouldAlert(notify) then
+        wf:Hide()
+        return
+    end
 
+    if not repairAnnounced then
+        repairAnnounced = true
+        AR.Sounds.Play(notify.sound)
+        if (notify.duration or 0) > 0 then
+            repairTimer = C_Timer.NewTimer(notify.duration, function()
+                repairTimer, repairDismissed = nil, true
+                wf:Hide()
+            end)
+        end
+    end
+    wf:Show()
+end
+
+-- Shows the banner for a few seconds whatever the real durability is.
+function GearModule:TestRepair()
+    GetDurabilityWarnFrame():Show()
+    AR.Sounds.Play(AR.db.gear.repairNotify.sound)
+    C_Timer.After(5, function() GearModule:RunDurabilityCheck() end)
+end
+
+-- Every current problem as { key, text }, minus the ignored ones; nil with no spec chosen.
+-- The key is what "Ignore" stores. Weapon issues are per spec.
+function GearModule:CollectIssues(db)
     local _, specId = Util.GetSpec()
-    if not specId then return end
+    if not specId then return nil end
     local specData = SPEC_DATA[specId]
 
-    -- Each issue is { key, text }; the key is what "Ignore" stores. Weapon issues are per spec.
     local issues = {}
     local function Add(key, text)
         if not db.gear.ignored[key] then table.insert(issues, { key = key, text = text }) end
@@ -311,6 +346,27 @@ function GearModule:RunCheck(silent)
         local gliderIssue = self:CheckCloakGlider()
         if gliderIssue then Add("cloakGlider", gliderIssue) end
     end
+
+    return issues
+end
+
+-- silent: skip the chat lines (used when re-checking right after an Ignore click).
+function GearModule:RunCheck(silent)
+    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
+    if not AR.db or not AR.db.gear then return end
+    if InCombatLockdown() then
+        needsRecheck = true
+        return
+    end
+    needsRecheck = false
+    local db = AR.db
+    if not db.gear.enabled or not AR.UI.ShouldAlert(db.gear.notify) then
+        gearAlert:Reset()
+        return
+    end
+
+    local issues = self:CollectIssues(db)
+    if not issues then return end
 
     if #issues == 0 then
         gearAlert:Reset()
@@ -336,6 +392,36 @@ function GearModule:RunCheck(silent)
         end
         self:ShowAlert("", items)
     end
+end
+
+-- Example alert (and banner) for the Options popup and /ar test.
+function GearModule:TestAlert()
+    gearAlert:Preview("", {
+        { text = "Arms Warrior: main hand should be a 2-handed weapon" },
+        { text = "Trinket 2: item level 40 (below 50)" },
+    }, AR.db.gear.notify)
+    self:TestRepair()
+end
+
+-- Dashboard lines: gearText, gearOk, repairText, repairOk.
+function GearModule:GetStatus()
+    local gearText, gearOk
+    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then
+        gearText, gearOk = "Not at max level", true
+    else
+        local issues = self:CollectIssues(AR.db)
+        if not issues then
+            gearText, gearOk = "No specialization selected", true
+        elseif #issues == 0 then
+            gearText, gearOk = "No issues", true
+        else
+            gearText = #issues .. (#issues == 1 and " issue: " or " issues: ") .. issues[1].text
+            gearOk = false
+        end
+    end
+    local lowest = self:GetLowestDurability()
+    local repairText = lowest and string.format("Lowest durability %d%%", lowest) or "No durability data"
+    return gearText, gearOk, repairText, not self:CheckLowDurability()
 end
 
 local ScheduleCheck = Util.Debounce(2, function()
@@ -384,7 +470,7 @@ function GearModule:BuildUI(parent, db)
 
     AR.UI.Title(parent, "Gear Reminders", X, -16)
 
-    AR.UI.NotifyRow(parent, X, -48, db.gear.notify)
+    AR.UI.NotifyRow(parent, X, -48, db.gear.notify, function() GearModule:TestAlert() end)
     AR.UI.Divider(parent, -80, X - 4)
 
     local ROWS_TOP = -96
@@ -467,6 +553,9 @@ function GearModule:BuildUI(parent, db)
     local lDurUnit = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lDurUnit:SetPoint("LEFT", durBox, "RIGHT", 8, 0)
     lDurUnit:SetText("%  (persists until repaired)")
+
+    local repairOptions = AR.UI.AlertOptionsButton(parent, db.gear.repairNotify, function() GearModule:TestRepair() end)
+    repairOptions:SetPoint("LEFT", lDurUnit, "RIGHT", 16, 0)
 
     Stripe(DUR_TOP - ROW_H, 2)
     AddCheck(DUR_TOP - ROW_H, "cloakGlider", "Missing Goblin Glider cloak tinker (Engineering)")

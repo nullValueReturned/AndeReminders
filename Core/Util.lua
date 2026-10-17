@@ -43,6 +43,23 @@ function Util.SafeNumber(v)
 end
 
 -- ---------------------------------------------------------------------------
+-- Tables
+-- ---------------------------------------------------------------------------
+
+function Util.DeepCopy(v)
+    if type(v) ~= "table" then return v end
+    local copy = {}
+    for k, val in pairs(v) do copy[k] = Util.DeepCopy(val) end
+    return copy
+end
+
+-- True in any instance (dungeon, raid, scenario, delve, battleground) or while grouped.
+-- Backs the "only alert in dungeons, raids and groups" option.
+function Util.InGroupContent()
+    return (IsInInstance()) or IsInGroup()
+end
+
+-- ---------------------------------------------------------------------------
 -- Timers
 -- ---------------------------------------------------------------------------
 
@@ -168,4 +185,46 @@ function Fonts.Apply(fontString, name, size, flags)
     if fontString:SetFont(Fonts.Path(name), size, flags) == false then
         fontString:SetFont(STANDARD_TEXT_FONT, size, flags)
     end
+end
+
+-- ---------------------------------------------------------------------------
+-- Alert sounds (LibSharedMedia when present, a few stock sounds otherwise)
+-- ---------------------------------------------------------------------------
+
+local Sounds = {}
+AR.Sounds = Sounds
+
+local BUILTIN_SOUNDS = {
+    { "Raid Warning", SOUNDKIT and SOUNDKIT.RAID_WARNING },
+    { "Ready Check",  SOUNDKIT and SOUNDKIT.READY_CHECK },
+    { "Alarm Clock",  SOUNDKIT and SOUNDKIT.ALARM_CLOCK_WARNING_3 },
+}
+
+-- Dropdown options: "None" (value "") followed by every available sound.
+function Sounds.Options()
+    local options, seen = { { label = "None", value = "" } }, {}
+    for _, entry in ipairs(BUILTIN_SOUNDS) do
+        if entry[2] then
+            options[#options + 1] = { label = entry[1], value = entry[1] }
+            seen[entry[1]] = true
+        end
+    end
+    if LSM then
+        for _, name in ipairs(LSM:List("sound")) do
+            if not seen[name] then options[#options + 1] = { label = name, value = name } end
+        end
+    end
+    return options
+end
+
+function Sounds.Play(name)
+    if not name or name == "" then return end
+    for _, entry in ipairs(BUILTIN_SOUNDS) do
+        if entry[1] == name and entry[2] then
+            PlaySound(entry[2], "Master")
+            return
+        end
+    end
+    local path = LSM and LSM:Fetch("sound", name, true)
+    if path then PlaySoundFile(path, "Master") end
 end

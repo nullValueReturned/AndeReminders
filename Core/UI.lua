@@ -282,6 +282,23 @@ end
 -- Checkboxes become pill toggles. The size is fixed so every call site lines up the same way.
 local TRACK_W, TRACK_H, KNOB = 30, 16, 12
 
+-- Modules give their checkboxes an OnClick with SetScript, which throws away the OnClick hook
+-- the skins use to follow the checked state. So SetScript("OnClick") is wrapped to re-sync
+-- after the module's handler (the button has already toggled by then).
+local function SyncAfterClick(btn, Sync)
+    local setScript = btn.SetScript
+    btn.SetScript = function(self, name, fn)
+        if name == "OnClick" and fn then
+            local handler = fn
+            fn = function(...)
+                handler(...)
+                Sync(false)
+            end
+        end
+        return setScript(self, name, fn)
+    end
+end
+
 local function SkinCheck(btn)
     btn:SetSize(36, 22)
     btn.SetSize, btn.SetWidth, btn.SetHeight = function() end, function() end, function() end
@@ -315,6 +332,7 @@ local function SkinCheck(btn)
     local function Sync(instant) on:To(btn:GetChecked() and 1 or 0, instant) end
     hooksecurefunc(btn, "SetChecked", function() Sync(false) end)
     btn:HookScript("OnClick", function() Sync(false) end)
+    SyncAfterClick(btn, Sync)
     btn:HookScript("OnShow",  function() Sync(true) end)
     btn:HookScript("OnEnter", function() hov:To(1) end)
     btn:HookScript("OnLeave", function() hov:To(0) end)
@@ -341,6 +359,7 @@ local function SkinRadio(btn)
     local function Sync(instant) on:To(btn:GetChecked() and 1 or 0, instant) end
     hooksecurefunc(btn, "SetChecked", function() Sync(false) end)
     btn:HookScript("OnClick", function() Sync(false) end)
+    SyncAfterClick(btn, Sync)
     btn:HookScript("OnShow",  function() Sync(true) end)
     Sync(true)
 end
@@ -670,12 +689,121 @@ function UI.Dropdown(parent, width, options, getter, setter, config)
 end
 
 -- ---------------------------------------------------------------------------
--- "Notify via: [o ] Chat  [o ] On-screen" row
+-- Alert options popup: sound, group-only, auto-hide and a test button for one notify table
 -- ---------------------------------------------------------------------------
 
--- notify = { chat = bool, screen = bool }. Returns the "On-screen" label so callers can chain
--- further widgets after it.
-function UI.NotifyRow(parent, x, y, notify)
+local optionsPopup
+
+local function GetOptionsPopup()
+    if optionsPopup then return optionsPopup end
+
+    local f = NewFrame("Frame", "AndeRemindersAlertOptions", UIParent)
+    f:SetSize(400, 196)
+    f:SetFrameStrata("FULLSCREEN_DIALOG")
+    f:SetClampedToScreen(true)
+    f:EnableMouse(true)
+    UI.Surface(f, C.popup, { 1, 1, 1, 0.14 })
+    f:Hide()
+    tinsert(UISpecialFrames, "AndeRemindersAlertOptions")
+
+    local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    title:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -14)
+    title:SetText("ALERT OPTIONS")
+    UI.AccentText(title)
+
+    local closeBtn = NewFrame("Button", nil, f, "UIPanelCloseButton")
+    closeBtn:SetSize(22, 22)
+    closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
+    closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+    local soundLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    soundLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -48)
+    soundLabel:SetText("Sound")
+
+    f.soundDrop = UI.Dropdown(f, 210, AR.Sounds.Options(),
+        function() return f.notify and f.notify.sound or "" end,
+        function(value) if f.notify then f.notify.sound = (value ~= "") and value or nil end end,
+        { maxHeight = 260 })
+    f.soundDrop:SetPoint("LEFT", soundLabel, "RIGHT", 14, 0)
+
+    local play = UI.Button(f, "Play", 56, 24)
+    play:SetPoint("LEFT", f.soundDrop, "RIGHT", 8, 0)
+    play:SetScript("OnClick", function() if f.notify then AR.Sounds.Play(f.notify.sound) end end)
+
+    f.cbGroup = NewFrame("CheckButton", nil, f, "UICheckButtonTemplate")
+    f.cbGroup:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -78)
+    f.cbGroup:SetScript("OnClick", function(self)
+        if f.notify then f.notify.instanceOnly = self:GetChecked() end
+    end)
+    local groupLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    groupLabel:SetPoint("LEFT", f.cbGroup, "RIGHT", 6, 0)
+    groupLabel:SetText("Only alert in dungeons, raids and groups")
+
+    local hideLabel = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    hideLabel:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -118)
+    hideLabel:SetText("Hide after")
+
+    f.durationBox = NewFrame("EditBox", nil, f, "InputBoxTemplate")
+    f.durationBox:SetSize(52, 24)
+    f.durationBox:SetPoint("LEFT", hideLabel, "RIGHT", 12, 0)
+    f.durationBox:SetAutoFocus(false)
+    f.durationBox:SetNumeric(true)
+    f.durationBox:SetMaxLetters(3)
+    local function SaveDuration(self)
+        local v = tonumber(self:GetText()) or 0
+        if f.notify then f.notify.duration = v end
+        self:SetText(tostring(v))
+    end
+    f.durationBox:SetScript("OnEnterPressed", function(self) SaveDuration(self); self:ClearFocus() end)
+    f.durationBox:SetScript("OnEditFocusLost", SaveDuration)
+
+    local hideUnit = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    hideUnit:SetPoint("LEFT", f.durationBox, "RIGHT", 8, 0)
+    hideUnit:SetText("seconds  (0 = stay until dismissed)")
+
+    f.testBtn = UI.Button(f, "Show example alert", 160, 24)
+    f.testBtn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 14)
+    f.testBtn:SetScript("OnClick", function() if f.test then f.test() end end)
+
+    optionsPopup = f
+    return f
+end
+
+-- "Options..." button that edits notify = { sound, instanceOnly, duration }. test() (optional)
+-- shows an example alert so the options can be tried out.
+function UI.AlertOptionsButton(parent, notify, test)
+    local btn = UI.Button(parent, "Options...", 90, 22)
+    btn:SetScript("OnClick", function(self)
+        local f = GetOptionsPopup()
+        if f:IsShown() and f.notify == notify then
+            f:Hide()
+            return
+        end
+        f.notify, f.test = notify, test
+        f.soundDrop.Refresh()
+        f.cbGroup:SetChecked(notify.instanceOnly)
+        f.durationBox:SetText(tostring(notify.duration or 0))
+        f.testBtn:SetShown(test ~= nil)
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", self, "BOTTOMLEFT", 0, -4)
+        f:Show()
+    end)
+    return btn
+end
+
+-- False when notify asks for group content only and the player is soloing in the open world.
+function UI.ShouldAlert(notify)
+    if notify and notify.instanceOnly and not AR.Util.InGroupContent() then return false end
+    return true
+end
+
+-- ---------------------------------------------------------------------------
+-- "Notify via: [o ] Chat  [o ] On-screen  [Options...]" row
+-- ---------------------------------------------------------------------------
+
+-- notify = { chat = bool, screen = bool, sound, instanceOnly, duration }. test() is optional.
+-- Returns the "On-screen" label so callers can chain further widgets after it.
+function UI.NotifyRow(parent, x, y, notify, test)
     local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y - 4)
     label:SetText("NOTIFY VIA")
@@ -698,16 +826,20 @@ function UI.NotifyRow(parent, x, y, notify)
     screenLabel:SetPoint("LEFT", cbScreen, "RIGHT", 2, 0)
     screenLabel:SetText("On-screen")
 
+    local options = UI.AlertOptionsButton(parent, notify, test)
+    options:SetPoint("LEFT", screenLabel, "RIGHT", 22, 0)
+
     return screenLabel
 end
 
 -- ---------------------------------------------------------------------------
 -- Alert box (accent stripe, header, wrapped body, optional per-item rows, snooze button),
--- anchored to a named anchor
+-- anchored to a named anchor. Visible alerts are stacked so they never overlap.
 -- ---------------------------------------------------------------------------
 
 local ALERT_ITEM_H = 22
-local alerts = {}  -- every alert, so "/ar unsnooze" can reach them
+local ALERT_GAP    = 6
+local alerts = {}  -- every alert, in creation order: stacking order and /ar unsnooze
 
 local function ShowTip(owner, text)
     GameTooltip:SetOwner(owner, "ANCHOR_TOP")
@@ -715,37 +847,58 @@ local function ShowTip(owner, text)
     GameTooltip:Show()
 end
 
+-- The first visible alert sits on its own anchor; each further one hangs below the one before.
+function UI.LayoutAlerts()
+    local prev
+    for _, a in ipairs(alerts) do
+        local f = a.frame()
+        if f and f:IsShown() then
+            f:ClearAllPoints()
+            if prev then
+                f:SetPoint("TOP", prev, "BOTTOM", 0, -ALERT_GAP)
+            else
+                local anchor = AR.anchorFrames and AR.anchorFrames[a.spec.anchor]
+                if anchor then
+                    f:SetPoint("CENTER", anchor, "CENTER", 0, 0)
+                else
+                    f:SetPoint("TOP", UIParent, "TOP", 0, a.spec.fallbackY)
+                end
+            end
+            prev = f
+        end
+    end
+end
+
 -- spec = { name = global frame name, anchor = anchor name, width, fallbackY }
 -- The frame is created on first use and only ever shown/hidden afterwards.
 --
--- alert:Show(text, items)
+-- alert:Show(text, items, notify)
 --   items (optional) = array of { text = label, onIgnore = function }. Each gets a row with an
 --   "Ignore" button; onIgnore is responsible for storing the ignore and re-running the check.
+--   notify (optional) = the module's notify table: sound plays when the content changes and
+--   duration hides the alert after that many seconds.
+-- alert:Preview(text, items, notify) shows an example regardless of snooze, for the test buttons.
 -- Every alert has a "Snooze" button: it hides the alert until its content changes or the UI
 -- reloads. alert:Reset() hides it and forgets the snooze (call when the problem is fixed).
 function UI.CreateAlert(spec)
     local frame
-    local alert = {}
+    local alert = { spec = spec }
     local rows = {}
-    local snoozedSig, currentSig
+    local snoozedSig, currentSig, shownSig
+    local hideTimer
+
+    function alert.frame() return frame end
 
     local function GetFrame()
         if frame then return frame end
 
         frame = NewFrame("Frame", spec.name, UIParent)
         frame:SetSize(spec.width, 80)
-
-        local anchor = AR.anchorFrames and AR.anchorFrames[spec.anchor]
-        if anchor then
-            frame:SetPoint("CENTER", anchor, "CENTER", 0, 0)
-        else
-            frame:SetPoint("TOP", UIParent, "TOP", 0, spec.fallbackY)
-        end
-
         frame:EnableMouse(true)
         frame:SetFrameStrata("MEDIUM")
         UI.Surface(frame, { 0.050, 0.054, 0.066, 0.96 }, { 1, 1, 1, 0.09 })
         frame:Hide()
+        frame:HookScript("OnHide", UI.LayoutAlerts)
 
         local stripe = frame:CreateTexture(nil, "ARTWORK")
         stripe:SetPoint("TOPLEFT"); stripe:SetPoint("BOTTOMLEFT"); stripe:SetWidth(3)
@@ -808,14 +961,8 @@ function UI.CreateAlert(spec)
         return row
     end
 
-    function alert:Show(text, items)
-        items = items or {}
-        local sig = text
-        for _, item in ipairs(items) do sig = sig .. "\n" .. item.text end
-        currentSig = sig
-        if snoozedSig == sig then return end
-        snoozedSig = nil
-
+    -- Fills the frame with text and item rows and shows it (position is UI.LayoutAlerts' job).
+    local function Render(text, items)
         local f = GetFrame()
         f.body:SetText(text)
         local bodyH = text ~= "" and (f.body:GetStringHeight() + 4) or 0
@@ -836,6 +983,45 @@ function UI.CreateAlert(spec)
 
         f:SetHeight(y + 36)
         f:Show()
+        UI.LayoutAlerts()
+        return f
+    end
+
+    local function ArmHideTimer(seconds)
+        if hideTimer then hideTimer:Cancel(); hideTimer = nil end
+        if seconds and seconds > 0 then
+            hideTimer = C_Timer.NewTimer(seconds, function()
+                hideTimer = nil
+                if frame then frame:Hide() end
+            end)
+        end
+    end
+
+    function alert:Show(text, items, notify)
+        items = items or {}
+        notify = notify or {}
+        local sig = text
+        for _, item in ipairs(items) do sig = sig .. "\n" .. item.text end
+        currentSig = sig
+        if snoozedSig == sig then return end
+        snoozedSig = nil
+
+        local wasShown = frame ~= nil and frame:IsShown()
+        local changed  = shownSig ~= sig
+        shownSig = sig
+        Render(text, items)
+
+        -- Sound only for new content: a re-check that shows the same alert again stays quiet.
+        if changed then AR.Sounds.Play(notify.sound) end
+        if changed or not wasShown then ArmHideTimer(notify.duration) end
+    end
+
+    function alert:Preview(text, items, notify)
+        notify = notify or {}
+        currentSig = "\1preview"
+        Render(text, items or {})
+        AR.Sounds.Play(notify.sound)
+        ArmHideTimer(math.max(notify.duration or 0, 8))
     end
 
     function alert:Hide()
@@ -843,7 +1029,7 @@ function UI.CreateAlert(spec)
     end
 
     function alert:Reset()
-        snoozedSig, currentSig = nil, nil
+        snoozedSig, currentSig, shownSig = nil, nil, nil
         self:Hide()
     end
 
@@ -861,4 +1047,146 @@ end
 
 function UI.UnsnoozeAlerts()
     for _, a in ipairs(alerts) do a:Unsnooze() end
+end
+
+-- ---------------------------------------------------------------------------
+-- Prompt / confirm dialog
+-- ---------------------------------------------------------------------------
+
+local promptFrame
+
+-- opts = { title, text, input = default string (omit for a plain confirm), accept = button
+-- label, onAccept = function(text) }
+function UI.Prompt(opts)
+    local f = promptFrame
+    if not f then
+        f = NewFrame("Frame", "AndeRemindersPrompt", UIParent)
+        f:SetSize(420, 176)
+        f:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:SetToplevel(true)
+        f:EnableMouse(true)
+        UI.Surface(f, C.window, C.border)
+        f:Hide()
+        tinsert(UISpecialFrames, "AndeRemindersPrompt")
+
+        f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -16)
+        UI.AccentText(f.title)
+
+        f.text = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        f.text:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -48)
+        f.text:SetPoint("TOPRIGHT", f, "TOPRIGHT", -18, -48)
+        f.text:SetJustifyH("LEFT")
+        f.text:SetWordWrap(true)
+
+        f.input = NewFrame("EditBox", nil, f, "InputBoxTemplate")
+        f.input:SetHeight(26)
+        f.input:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 56)
+        f.input:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 56)
+        f.input:SetAutoFocus(false)
+        f.input:SetMaxLetters(40)
+
+        local function Accept()
+            local text, cb = f.input:GetText(), f.onAccept
+            f:Hide()
+            if cb then cb(text) end
+        end
+        f.accept = UI.Button(f, "OK", 110, 26)
+        f.accept:SetPoint("BOTTOMRIGHT", f, "BOTTOM", -6, 16)
+        f.accept:SetScript("OnClick", Accept)
+        f.cancel = UI.Button(f, "Cancel", 110, 26)
+        f.cancel:SetPoint("BOTTOMLEFT", f, "BOTTOM", 6, 16)
+        f.cancel:SetScript("OnClick", function() f:Hide() end)
+        f.input:SetScript("OnEnterPressed", Accept)
+        f.input:SetScript("OnEscapePressed", function() f:Hide() end)
+        promptFrame = f
+    end
+
+    f.title:SetText(opts.title or "")
+    f.text:SetText(opts.text or "")
+    f.accept:SetText(opts.accept or "OK")
+    f.onAccept = opts.onAccept
+    f.input:SetShown(opts.input ~= nil)
+    if opts.input ~= nil then
+        f.input:SetText(opts.input)
+        f:Show()
+        f.input:SetFocus()
+        f.input:HighlightText()
+    else
+        f:Show()
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Copy dialog: shows a string to copy, or takes one to import
+-- ---------------------------------------------------------------------------
+
+local copyFrame
+
+-- opts = { title, text (string to show), hint, import = true to show an Import button,
+-- onImport = function(str) -> error message or nil }
+function UI.CopyDialog(opts)
+    local f = copyFrame
+    if not f then
+        f = NewFrame("Frame", "AndeRemindersCopyDialog", UIParent)
+        f:SetSize(520, 300)
+        f:SetPoint("CENTER", UIParent, "CENTER")
+        f:SetFrameStrata("FULLSCREEN_DIALOG")
+        f:SetToplevel(true)
+        f:EnableMouse(true)
+        f:SetMovable(true)
+        f:RegisterForDrag("LeftButton")
+        f:SetScript("OnDragStart", f.StartMoving)
+        f:SetScript("OnDragStop", f.StopMovingOrSizing)
+        UI.Surface(f, C.window, C.border)
+        f:Hide()
+        tinsert(UISpecialFrames, "AndeRemindersCopyDialog")
+
+        f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        f.title:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -16)
+        UI.AccentText(f.title)
+
+        local closeBtn = NewFrame("Button", nil, f, "UIPanelCloseButton")
+        closeBtn:SetPoint("TOPRIGHT", f, "TOPRIGHT", -8, -8)
+        closeBtn:SetScript("OnClick", function() f:Hide() end)
+
+        local sf = NewFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
+        sf:SetPoint("TOPLEFT", f, "TOPLEFT", 18, -50)
+        sf:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -30, 62)
+        UI.Surface(sf, C.input, C.inputBorder)
+
+        f.eb = NewFrame("EditBox", nil, sf)
+        f.eb:SetMultiLine(true)
+        f.eb:SetFontObject("ChatFontNormal")
+        f.eb:SetWidth(470)
+        f.eb:SetAutoFocus(false)
+        f.eb:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+        sf:SetScrollChild(f.eb)
+
+        f.hint = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        f.hint:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 24)
+
+        f.err = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        f.err:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 18, 42)
+        f.err:SetTextColor(1, 0.3, 0.3)
+
+        f.go = UI.Button(f, "Import", 110, 26)
+        f.go:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -18, 16)
+        f.go:SetScript("OnClick", function()
+            local err = f.onImport and f.onImport(f.eb:GetText())
+            if err then f.err:SetText(err) else f:Hide() end
+        end)
+        copyFrame = f
+    end
+
+    f.title:SetText(opts.title or "")
+    f.hint:SetText(opts.hint or "")
+    f.err:SetText("")
+    f.onImport = opts.onImport
+    f.go:SetShown(opts.import == true)
+    f.eb:SetText(opts.text or "")
+    f:Show()
+    f.eb:SetFocus()
+    if opts.text then f.eb:HighlightText() end
 end

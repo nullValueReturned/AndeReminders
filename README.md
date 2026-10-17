@@ -4,6 +4,12 @@ A lightweight World of Warcraft addon (Midnight, patch 12.1.5) that nudges you a
 
 ## Features
 
+### General tab
+- Status of every reminder (talents, enchants, gems, gear, repair) at a glance, each with its own on/off switch. **Run checks now** and **Show example alerts** buttons.
+- **Profiles**: each character can use its own profile (new characters start on `Default`). Create, copy settings from another profile, reset, delete, and export / import a whole profile as a string. Switching reloads the UI.
+- **Window scale** and **anchor positions**: type exact X / Y offsets, snap dragged anchors to a grid, or click an anchor and nudge it with the arrow keys (Shift = 10).
+- The search box at the top of the settings window finds a setting by its label on any tab.
+
 ### Talents
 - Flashes your active talent loadout name + icon on screen when a ready check fires.
 - Uses [TalentLoadoutEx](https://www.curseforge.com/wow/addons/talent-loadout-ex) names and icons if installed; otherwise falls back to the native saved loadout name (or "Starter Build" while that is active).
@@ -19,12 +25,16 @@ On login, zone change, and equip, checks for:
 
 Notifications can be on-screen, in chat, or both. Equipment changed mid-fight is re-checked when combat ends.
 
+### Alert options
+Every alert has an **Options...** button next to its "Notify via" row (and next to the repair threshold): pick a **sound**, limit it to **dungeons, raids and groups**, make it **hide itself after N seconds**, and **show an example**. Several alerts showing at once are stacked under each other instead of overlapping.
+
 ### Repair
 Continuous durability monitor. A large on-screen banner appears the moment any slot drops below a configurable durability threshold (default 50%, out of combat), including right after login if you log in damaged.
 
 ### Enchants & Gems
 - Checks every enchantable slot for missing enchants on login/zone/equip.
 - Optionally warns about empty gem sockets on any equipped item.
+- Re-checks when you enchant or socket an item (those raise no equipment event), and keeps re-checking every couple of seconds while the alert is on screen.
 - Per-slot or global item-level floor so you don't get nagged about leveling greens.
 - On-screen alert and/or chat output.
 
@@ -35,6 +45,9 @@ Continuous durability monitor. A large on-screen banner appears the moment any s
 ### Quality of Life
 - **Great Vault minimap button** — hover for the example reward item levels of your Raid, Mythic+ and Delve slots; click to open the vault. The icon changes when rewards are waiting.
 - **Auto-accept LFG role checks** — uses your assigned role, or your spec role if none is assigned. Off by default.
+- **Auto repair** at vendors, guild funds first when allowed. Off by default.
+- **Auto release** after dying, only in the open world and battlegrounds, never in dungeons or raids, and never when you have a self-resurrect. Off by default.
+- The Great Vault tooltip also shows progress toward the next locked slot of each row (for example `2/4`).
 
 ### World markers
 Keybinds for the eight world markers and "clear all". Markers are placed at your feet, or at the mouse cursor if you enable that option. Bindings are re-applied every login, and retried after combat if a reload happened mid-fight.
@@ -50,6 +63,8 @@ Build your own alerts on top of BigWigs or DBM:
 - Display options: font, size, color, icon override (with a searchable icon picker), progress swipe, a `%m` message / `%c` count / `%t` time template, anchor point and offset.
 - Conditions: on show, on hide, or at a remaining time — glow (pixel / proc / auto-cast), play a sound, scale, recolor, or flash.
 - Export and import entries (or whole groups) as copy-pasteable strings.
+- **Templates** for common alerts, **Duplicate**, **Up / Down / Move to group** reordering, and a **Test this entry** button that shows the entry with realistic fake data.
+- An orange `!` marks entries that matched while the game hid the boss-mod text (secret values), since text filters cannot apply to those.
 
 Boss-mod text that the game marks as secret (12.x) is never read by the addon; those entries simply fall back to their own name.
 
@@ -68,6 +83,11 @@ Every notification type has its own draggable anchor frame. Open settings, click
 | Command | Action |
 | --- | --- |
 | `/ar` | Toggle the settings window (Escape closes it) |
+| `/ar <tab>` | Open a settings tab, e.g. `/ar gear`, `/ar bossmods`, `/ar world markers` |
+| `/ar check` | Re-run every check and print the status of each |
+| `/ar test` | Show an example of every alert |
+| `/ar profile [name]` | Show or switch this character's profile (reloads the UI) |
+| `/ar gems` | List the socket and gem counts the gem check sees |
 | `/ar anchors` | Show / hide the anchor frames |
 | `/ar reset` | Put every anchor back at its default position |
 | `/ar unsnooze` | Show snoozed alerts again |
@@ -89,4 +109,4 @@ Every notification type has its own draggable anchor frame. Open settings, click
 
 ## Saved Variables
 
-All settings live in `AndeRemindersDB`, scoped per account.
+All settings live in `AndeRemindersDB`, scoped per account and split into profiles (see the General tab).

@@ -21,7 +21,7 @@ local ITEM_COLOR     = "|cFFA335EE"  -- epic purple
 -- same way Blizzard's own vault frame does it, not by their position in the activities list.
 local function getVaultData()
     local activities = C_WeeklyRewards.GetActivities()
-    if not activities then return {}, {}, {}, nil end
+    if not activities then return {}, {}, {}, nil, {} end
 
     local threshold = Enum.WeeklyRewardChestThresholdType
     local raidData, mplusData, delveData = {}, {}, {}
@@ -31,9 +31,20 @@ local function getVaultData()
         [threshold.World]      = delveData,
     }
     local highest
+    -- progress[row] = { done = progress so far, nextAt = threshold of the next locked slot }
+    local progress = {}
 
     for _, activity in ipairs(activities) do
         local row = rowByType[activity.type]
+        if row then
+            local p = progress[row] or { done = 0 }
+            progress[row] = p
+            p.done = math.max(p.done, activity.progress or 0)
+            local threshold = activity.threshold or 0
+            if (activity.progress or 0) < threshold and (not p.nextAt or threshold < p.nextAt) then
+                p.nextAt = threshold
+            end
+        end
         local itemLink = row and C_WeeklyRewards.GetExampleRewardItemHyperlinks(activity.id)
         if itemLink then
             local ilvl = C_Item.GetDetailedItemLevelInfo(itemLink)
@@ -44,19 +55,26 @@ local function getVaultData()
         end
     end
 
-    return raidData, mplusData, delveData, highest
+    return raidData, mplusData, delveData, highest, progress
 end
 
-local function formatLine(data)
+-- "3/4" towards the next locked slot, or "done" once all three are unlocked.
+local function progressText(p)
+    if not p then return "" end
+    if not p.nextAt then return "  |cFF40FF40done|r" end
+    return string.format("  |cFF999999%d/%d|r", p.done, p.nextAt)
+end
+
+local function formatLine(data, p)
     local function cell(v)
         if v then return ITEM_COLOR .. v .. "|r" end
         return "xxx"
     end
-    return string.format("%s || %s || %s", cell(data[1]), cell(data[2]), cell(data[3]))
+    return string.format("%s || %s || %s%s", cell(data[1]), cell(data[2]), cell(data[3]), progressText(p))
 end
 
 local function constructTooltip(tooltip)
-    local raidData, mplusData, delveData, highest = getVaultData()
+    local raidData, mplusData, delveData, highest, progress = getVaultData()
 
     tooltip:ClearLines()
     tooltip:AddDoubleLine("Great Vault", ITEM_COLOR .. (highest or "") .. "|r")
@@ -67,9 +85,9 @@ local function constructTooltip(tooltip)
         tooltip:AddLine(" ")
     end
 
-    tooltip:AddLine("|cFFa20506Raids|r     " .. formatLine(raidData))
-    tooltip:AddLine("|cFF555ACDMythic+|r  " .. formatLine(mplusData))
-    tooltip:AddLine("|cFFE1A18CDelves|r   " .. formatLine(delveData))
+    tooltip:AddLine("|cFFa20506Raids|r     " .. formatLine(raidData, progress[raidData]))
+    tooltip:AddLine("|cFF555ACDMythic+|r  " .. formatLine(mplusData, progress[mplusData]))
+    tooltip:AddLine("|cFFE1A18CDelves|r   " .. formatLine(delveData, progress[delveData]))
     tooltip:AddLine(" ")
     tooltip:AddLine("|cffff9922Click|r to open/close the Great Vault.")
 end
@@ -96,6 +114,13 @@ function QoLModule:InitDB(db)
     if not db.qol.greatVault then db.qol.greatVault = {} end
     -- LibDBIcon manages: hide, minimapPos, lock, radius. Default to shown.
     if db.qol.greatVault.hide == nil then db.qol.greatVault.hide = false end
+
+    if not db.qol.autoRepair then db.qol.autoRepair = {} end
+    if db.qol.autoRepair.enabled == nil then db.qol.autoRepair.enabled = false end
+    if db.qol.autoRepair.useGuild == nil then db.qol.autoRepair.useGuild = true end
+
+    if not db.qol.autoRelease then db.qol.autoRelease = {} end
+    if db.qol.autoRelease.enabled == nil then db.qol.autoRelease.enabled = false end
 
     if not db.qol.autoAcceptLFG then db.qol.autoAcceptLFG = {} end
     if db.qol.autoAcceptLFG.enabled == nil then db.qol.autoAcceptLFG.enabled = false end
@@ -195,6 +220,35 @@ function QoLModule:BuildUI(parent, db)
     local lfgNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     lfgNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y)
     lfgNote:SetText("Uses your currently assigned role, or your spec role if none assigned.")
+
+    y = y - 30
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
+    y = y - 22
+
+    -- Checkbox + label bound to a boolean in a db table; returns the label.
+    local function AddToggle(tbl, key, text)
+        local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, y + 4)
+        cb:SetChecked(tbl[key])
+        cb:SetScript("OnClick", function(self) tbl[key] = self:GetChecked() end)
+        local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("LEFT", cb, "RIGHT", 6, 0)
+        label:SetText(text)
+        return label
+    end
+
+    AddToggle(db.qol.autoRepair, "enabled", "Repair automatically at vendors")
+    y = y - 26
+    AddToggle(db.qol.autoRepair, "useGuild", "Use guild funds first when available")
+    y = y - 30
+    AR.UI.Divider(parent, y, COL_NAME_X - 4)
+    y = y - 22
+
+    AddToggle(db.qol.autoRelease, "enabled", "Release spirit automatically after dying")
+    y = y - 26
+    local releaseNote = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    releaseNote:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X + 44, y)
+    releaseNote:SetText("Only in the open world and battlegrounds, never in dungeons or raids, and never when you can self-resurrect.")
 end
 
 -- ---------------------------------------------------------------------------
@@ -227,6 +281,59 @@ local function AutoAcceptLFGRoleCheck()
 end
 
 -- ---------------------------------------------------------------------------
+-- Auto repair / auto release
+-- ---------------------------------------------------------------------------
+
+local function CoinText(copper)
+    local fn = C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString or GetCoinTextureString
+    return fn(copper)
+end
+
+local function AutoRepair()
+    local cfg = AR.db and AR.db.qol and AR.db.qol.autoRepair
+    if not cfg or not cfg.enabled then return end
+    if not (CanMerchantRepair and CanMerchantRepair()) then return end
+
+    local cost, canRepair = GetRepairAllCost()
+    if not canRepair or not cost or cost <= 0 then return end
+
+    local useGuild = cfg.useGuild and IsInGuild() and CanGuildBankRepair and CanGuildBankRepair()
+    if useGuild then
+        local allowance = GetGuildBankWithdrawMoney and GetGuildBankWithdrawMoney() or 0
+        useGuild = allowance == -1 or allowance >= cost
+    end
+
+    if useGuild then
+        RepairAllItems(true)
+        Util.Print("repaired for " .. CoinText(cost) .. " (guild funds).")
+    elseif GetMoney() >= cost then
+        RepairAllItems()
+        Util.Print("repaired for " .. CoinText(cost) .. ".")
+    else
+        Util.Print("not enough gold to repair (" .. CoinText(cost) .. ").")
+    end
+end
+
+local function AutoRelease()
+    local cfg = AR.db and AR.db.qol and AR.db.qol.autoRelease
+    if not cfg or not cfg.enabled then return end
+
+    -- Dungeons and raids: dying there usually means waiting for a resurrection.
+    local inInstance, instanceType = IsInInstance()
+    if inInstance and instanceType ~= "pvp" then return end
+
+    -- Soulstone, reincarnation and the like: let the player choose.
+    if C_DeathInfo and C_DeathInfo.GetSelfResurrectOptions then
+        local options = C_DeathInfo.GetSelfResurrectOptions()
+        if options and #options > 0 then return end
+    end
+
+    C_Timer.After(0.5, function()
+        if UnitIsDeadOrGhost("player") and not UnitIsGhost("player") then RepopMe() end
+    end)
+end
+
+-- ---------------------------------------------------------------------------
 -- Events
 -- ---------------------------------------------------------------------------
 
@@ -236,8 +343,14 @@ events:RegisterEvent("WEEKLY_REWARDS_ITEM_CHANGED")
 events:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 events:RegisterEvent("CHALLENGE_MODE_MAPS_UPDATE")
 events:RegisterEvent("LFG_ROLE_CHECK_SHOW")
+events:RegisterEvent("MERCHANT_SHOW")
+events:RegisterEvent("PLAYER_DEAD")
 events:SetScript("OnEvent", function(_, event)
-    if event == "LFG_ROLE_CHECK_SHOW" then
+    if event == "MERCHANT_SHOW" then
+        AutoRepair()
+    elseif event == "PLAYER_DEAD" then
+        AutoRelease()
+    elseif event == "LFG_ROLE_CHECK_SHOW" then
         -- Next frame: Blizzard's own handler has to finish populating the popup first.
         RunNextFrame(AutoAcceptLFGRoleCheck)
     else

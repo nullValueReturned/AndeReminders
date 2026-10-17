@@ -1,7 +1,8 @@
 ## Interface: 120001, 120005, 120007, 120100, 120105
 ## Title: AndeReminders
-## Notes: Modular reminder addon for enchants, repairs, and more
-## Author:
+## Notes: Pre-pull reminders for talents, enchants, gems, gear and repairs, plus quality-of-life tools and a custom BigWigs / DBM alert builder.
+## Category: Interface Enhancements
+## Author: Andreas Hartmann
 ## Version: 1.0
 ## SavedVariables: AndeRemindersDB
 
@@ -17,6 +18,8 @@ Libs\LibSerialize\LibSerialize.lua
 AndeReminders.lua
 Core\Util.lua
 Core\UI.lua
+Core\Profiles.lua
+Modules\General.lua
 Modules\Enchants.lua
 Modules\Gear.lua
 Modules\Talents.lua

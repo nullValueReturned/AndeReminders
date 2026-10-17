@@ -49,6 +49,7 @@ function EnchantModule:InitDB(db)
     if not db.enchants.globalIlvl then
         db.enchants.globalIlvl = { enabled = true, value = 250 }
     end
+    if db.enchants.enabled == nil then db.enchants.enabled = true end
     if db.enchants.gems == nil then db.enchants.gems = true end
     if not db.enchants.gemIgnored then db.enchants.gemIgnored = {} end
     if not db.enchants.slots then db.enchants.slots = {} end
@@ -60,7 +61,7 @@ function EnchantModule:InitDB(db)
 end
 
 function EnchantModule:ShowAlert(text, items)
-    enchantAlert:Show(text, items)
+    enchantAlert:Show(text, items, AR.db and AR.db.enchants.notify)
 end
 
 -- ---------------------------------------------------------------------------
@@ -166,6 +167,10 @@ function EnchantModule:RunCheck(silent)
     end
     needsRecheck = false
     local db = AR.db
+    if not db.enchants.enabled or not AR.UI.ShouldAlert(db.enchants.notify) then
+        enchantAlert:Reset()
+        return
+    end
     local missing = self:CheckAll(db)
     local gems    = db.enchants.gems and self:CheckGems(db) or {}
     if #missing == 0 and #gems == 0 then
@@ -214,8 +219,50 @@ function EnchantModule:RunCheck(silent)
     end
 end
 
+-- Example alert for the Options popup and /ar test.
+function EnchantModule:TestAlert()
+    enchantAlert:Preview("", {
+        { text = "|cFFFFCC00Head|r  missing enchant" },
+        { text = "|cFFFFCC00Neck|r  empty gem socket" },
+    }, AR.db.enchants.notify)
+end
+
+-- Dashboard lines: enchantText, enchantsOk, gemText, gemsOk.
+function EnchantModule:GetStatus()
+    if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then
+        return "Not at max level", true, "Not at max level", true
+    end
+    local db = AR.db
+    local missing = self:CheckAll(db)
+    local enchantText = #missing == 0 and "All enchanted" or ("Missing: " .. table.concat(missing, ", "))
+
+    local names = {}
+    for _, id in ipairs(self:CheckGems(db)) do table.insert(names, GEM_SLOT_NAME[id]) end
+    local gemText = #names == 0 and "All sockets filled" or ("Empty: " .. table.concat(names, ", "))
+    return enchantText, #missing == 0, gemText, #names == 0
+end
+
 local ScheduleCheck = Util.Debounce(2, function()
     EnchantModule:RunCheck()
+end)
+
+-- Enchanting or socketing an equipped item raises no equipment-changed event, so these
+-- re-check quietly (no repeated chat line) and just refresh the alert.
+local ScheduleQuietCheck = Util.Debounce(2, function()
+    EnchantModule:RunCheck(true)
+end)
+
+-- The item link updates a moment after the server confirms, and some changes raise no event
+-- at all, so while the alert is up it re-checks every couple of seconds.
+local pollElapsed = 0
+local pollFrame = CreateFrame("Frame")
+pollFrame:SetScript("OnUpdate", function(_, dt)
+    if not enchantAlert:IsShown() then pollElapsed = 0; return end
+    pollElapsed = pollElapsed + dt
+    if pollElapsed >= 2 then
+        pollElapsed = 0
+        if not InCombatLockdown() then EnchantModule:RunCheck(true) end
+    end
 end)
 
 -- ---------------------------------------------------------------------------
@@ -228,12 +275,17 @@ enchantEvents:RegisterEvent("PLAYER_ENTERING_WORLD")
 enchantEvents:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 enchantEvents:RegisterEvent("PLAYER_REGEN_DISABLED")
 enchantEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+enchantEvents:RegisterUnitEvent("UNIT_INVENTORY_CHANGED", "player")
+enchantEvents:RegisterEvent("SOCKET_INFO_SUCCESS")
+enchantEvents:RegisterEvent("SOCKET_INFO_CLOSE")
 enchantEvents:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_REGEN_DISABLED" then
         enchantAlert:Hide()
     elseif event == "PLAYER_REGEN_ENABLED" then
         -- Gear swapped mid-fight was not checked; do it now that combat is over.
         if needsRecheck then ScheduleCheck() end
+    elseif event == "UNIT_INVENTORY_CHANGED" or event == "SOCKET_INFO_SUCCESS" or event == "SOCKET_INFO_CLOSE" then
+        ScheduleQuietCheck()
     else
         ScheduleCheck()
     end
@@ -253,7 +305,7 @@ function EnchantModule:BuildUI(parent, db)
 
     AR.UI.Title(parent, "Enchant & Gem Reminders", COL_NAME_X, -16)
 
-    AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify)
+    AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify, function() EnchantModule:TestAlert() end)
 
     -- Gem sockets (the per-slot table below only covers enchants).
     local cbGems = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")

@@ -56,9 +56,9 @@ end
 TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "cycle", label = "Cycle Target Marker" }
 
 local GROUPS = {
-    world  = { dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX,
+    world  = { title = "World marker", dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX,
                clearName = CLEAR_BUTTON_NAME, cycleName = WM_CYCLE_BUTTON_NAME },
-    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX,
+    target = { title = "Target marker", dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX,
                cycleName = TM_CYCLE_BUTTON_NAME },
 }
 local GROUP_ORDER = { GROUPS.world, GROUPS.target }
@@ -227,13 +227,20 @@ local function ApplyAllBindings(db)
     return true
 end
 
--- A key can only drive one action, across both tabs.
-local function ClearKeyFromOtherActions(db, newKey, exceptAction)
+-- "World marker: Star" without the inline icon texture, for chat messages.
+local function DescribeAction(group, action)
+    return group.title .. ": " .. action.label:gsub("|T.-|t ", "")
+end
+
+-- A key can only drive one action, across both tabs. Says so in chat when it takes one over.
+local function ClearKeyFromOtherActions(db, newKey, exceptAction, exceptGroup)
     for _, group in ipairs(GROUP_ORDER) do
         for _, action in ipairs(group.actions) do
             if action ~= exceptAction and db[group.dbKey].keybinds[action.key] == newKey then
                 db[group.dbKey].keybinds[action.key] = nil
                 if action.refresh then action.refresh() end
+                Util.Print(newKey .. " was bound to \"" .. DescribeAction(group, action) ..
+                    "\"; moved to \"" .. DescribeAction(exceptGroup, exceptAction) .. "\".")
             end
         end
     end
@@ -250,7 +257,12 @@ local function SetActionKey(db, group, action, newKey)
         SetBinding(oldKey)
     end
     if newKey then
-        ClearKeyFromOtherActions(db, newKey, action)
+        -- A key the game already uses for something else is taken over: say what was replaced.
+        local existing = GetBindingAction(newKey)
+        if existing and existing ~= "" and not existing:find("^CLICK AndeReminders") then
+            Util.Print(newKey .. " replaced the default binding \"" .. (GetBindingName(existing) or existing) .. "\".")
+        end
+        ClearKeyFromOtherActions(db, newKey, action, group)
         SetBinding(newKey, action.bindingTarget)
     end
     keybinds[action.key] = newKey
