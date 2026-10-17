@@ -119,13 +119,15 @@ end
 -- Raid target icons have no "clear all" call, but each icon can only sit on one
 -- unit at a time. Assigning every icon to the player in turn steals it from
 -- whichever unit held it, then the final clear removes the player's mark.
--- SetRaidTarget isn't protected, so the clear button is a plain (insecure) button
--- and works in combat too.
-local function ClearAllTargetMarkers()
+-- SetRaidTarget is protected, so this has to run through a secure macro button.
+local function BuildClearAllMacro()
+    local slash = SLASH_TARGET_MARKER1 or "/tm"
+    local lines = {}
     for i = 1, 8 do
-        SetRaidTarget("player", i)
+        lines[#lines + 1] = slash .. " [@player] " .. i
     end
-    SetRaidTarget("player", 0)
+    lines[#lines + 1] = slash .. " [@player] 0"
+    return table.concat(lines, "\n")
 end
 
 -- Each target marker key marks either the target or the mouseover unit: the
@@ -162,9 +164,10 @@ local function EnsureTargetButtons()
         btn:RegisterForClicks("AnyUp", "AnyDown")
         targetButtons[i] = btn
     end
-    targetClearButton = CreateFrame("Button", TM_CLEAR_BUTTON_NAME, nil)
-    targetClearButton:RegisterForClicks("AnyDown")
-    targetClearButton:SetScript("OnClick", ClearAllTargetMarkers)
+    targetClearButton = CreateFrame("Button", TM_CLEAR_BUTTON_NAME, nil, "SecureActionButtonTemplate")
+    targetClearButton:SetAttribute("type", "macro")
+    targetClearButton:SetAttribute("macrotext", BuildClearAllMacro())
+    targetClearButton:RegisterForClicks("AnyUp", "AnyDown")
 end
 
 -- ---------------------------------------------------------------------------
