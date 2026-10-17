@@ -437,12 +437,72 @@ function WorldMarkersModule:BuildUI(parent, db)
 end
 
 function TargetMarkersModule:BuildUI(parent, db)
+    local tm = db.targetMarkers
+    local modeButtons = {}
+
+    local function RefreshModeButtons()
+        for action, btn in pairs(modeButtons) do
+            local override = tm.overrides[action.key]
+            if override then
+                btn:SetText(override == "mouseover" and "Mouseover" or "Target")
+            else
+                btn:SetText("Default (" .. (tm.useMouseover and "Mouseover" or "Target") .. ")")
+            end
+        end
+    end
+
+    local function ApplyChange(revert)
+        if InCombatLockdown() then
+            revert()
+            Util.Print("Can't change Target Marker mode while in combat.")
+            return
+        end
+        ApplyTargetMode(tm)
+        RefreshModeButtons()
+    end
+
     BuildKeybindTab(parent, db, GROUPS.target, "Target Marker Keybinds", function(y)
+        local cbMouseover = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+        cbMouseover:SetSize(24, 24)
+        cbMouseover:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y + 3)
+        cbMouseover:SetChecked(tm.useMouseover)
+        cbMouseover:SetScript("OnClick", function(self)
+            local wanted = self:GetChecked()
+            local previous = tm.useMouseover
+            tm.useMouseover = wanted
+            ApplyChange(function()
+                tm.useMouseover = previous
+                self:SetChecked(previous)
+            end)
+        end)
+
+        local mouseoverLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        mouseoverLabel:SetPoint("LEFT", cbMouseover, "RIGHT", 6, 0)
+        mouseoverLabel:SetText("Mark the mouseover unit instead of your target (per-key override on the right)")
+
         local hint = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-        hint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y)
-        hint:SetText("Marks your current target. Requires group leader or assist when grouped.")
-        return y - 22
+        hint:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, y - 26)
+        hint:SetText("Requires group leader or assist when grouped.")
+        return y - 48
+    end, function(action, anchor)
+        local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+        btn:SetSize(140, 22)
+        btn:SetPoint("LEFT", anchor, "RIGHT", 10, 0)
+        modeButtons[action] = btn
+        btn:SetScript("OnClick", function()
+            -- Cycle: Default -> Target -> Mouseover -> Default
+            local previous = tm.overrides[action.key]
+            if previous == nil then
+                tm.overrides[action.key] = "target"
+            elseif previous == "target" then
+                tm.overrides[action.key] = "mouseover"
+            else
+                tm.overrides[action.key] = nil
+            end
+            ApplyChange(function() tm.overrides[action.key] = previous end)
+        end)
     end)
+    RefreshModeButtons()
 end
 
 -- ---------------------------------------------------------------------------
@@ -458,6 +518,7 @@ wmEvents:SetScript("OnEvent", function(_, event)
         ApplyAllBindings(AR.db)
     else -- PLAYER_REGEN_ENABLED: finish whatever combat lockdown blocked
         if pendingModeApply then ApplyMarkerMode(AR.db.worldMarkers.useCursor) end
+        if pendingTargetApply then ApplyTargetMode(AR.db.targetMarkers) end
         if pendingBindingApply then ApplyAllBindings(AR.db) end
     end
 end)
