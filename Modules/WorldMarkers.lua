@@ -71,6 +71,7 @@ end
 
 local markerButtons = {}
 local clearButton
+local targetButtons = {}
 local targetClearButton
 
 -- ---------------------------------------------------------------------------
@@ -143,13 +144,39 @@ local function ClearAllTargetMarkers()
     end
 end
 
+-- Each target marker key marks either the target or the mouseover unit: the
+-- per-key override wins, otherwise the global setting decides.
+local function UsesMouseover(tm, action)
+    local override = tm.overrides[action.key]
+    if override then return override == "mouseover" end
+    return tm.useMouseover
+end
+
+local pendingTargetApply = false
+
+local function ApplyTargetMode(tm)
+    if InCombatLockdown() then
+        pendingTargetApply = true
+        return false
+    end
+    local slash = SLASH_TARGET_MARKER1 or "/tm"
+    for _, action in ipairs(TARGET_ACTIONS) do
+        if action.index then
+            local unit = UsesMouseover(tm, action) and " [@mouseover] " or " "
+            targetButtons[action.index]:SetAttribute("macrotext", slash .. unit .. action.index)
+        end
+    end
+    pendingTargetApply = false
+    return true
+end
+
 local function EnsureTargetButtons()
     if targetClearButton then return end
     for i = 1, 8 do
         local btn = CreateFrame("Button", TM_BUTTON_PREFIX .. i, nil, "SecureActionButtonTemplate")
         btn:SetAttribute("type", "macro")
-        btn:SetAttribute("macrotext", (SLASH_TARGET_MARKER1 or "/tm") .. " " .. i)
         btn:RegisterForClicks("AnyUp", "AnyDown")
+        targetButtons[i] = btn
     end
     targetClearButton = CreateFrame("Button", TM_CLEAR_BUTTON_NAME, nil)
     targetClearButton:RegisterForClicks("AnyDown")
@@ -305,8 +332,12 @@ end
 function TargetMarkersModule:InitDB(db)
     if not db.targetMarkers then db.targetMarkers = {} end
     if not db.targetMarkers.keybinds then db.targetMarkers.keybinds = {} end
+    if db.targetMarkers.useMouseover == nil then db.targetMarkers.useMouseover = false end
+    -- overrides[actionKey] = "target" | "mouseover"; nil follows the global setting.
+    if not db.targetMarkers.overrides then db.targetMarkers.overrides = {} end
 
     EnsureTargetButtons()
+    ApplyTargetMode(db.targetMarkers)
 end
 
 -- ---------------------------------------------------------------------------
@@ -317,7 +348,8 @@ local COL_NAME_X = 12
 local ROW_HEIGHT = 26
 
 -- Section title, optional extra widgets (returns the next y), then the keybind rows.
-local function BuildKeybindTab(parent, db, group, title, extraWidgets)
+-- `rowExtra(action, anchorBtn)` optionally adds a widget to the right of each row.
+local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
     local sectionTitle = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     sectionTitle:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -10)
     sectionTitle:SetText(title)
@@ -368,6 +400,8 @@ local function BuildKeybindTab(parent, db, group, title, extraWidgets)
             SetActionKey(db, group, action, nil)
             Refresh()
         end)
+
+        if rowExtra and action.index then rowExtra(action, clearBtn) end
 
         y = y - ROW_HEIGHT
     end
