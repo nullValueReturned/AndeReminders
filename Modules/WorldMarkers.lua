@@ -10,6 +10,7 @@ local TargetMarkersModule  = {}
 -- plain insecure Lua that just points a physical key at these buttons.
 local BUTTON_PREFIX        = "AndeRemindersWM"
 local CLEAR_BUTTON_NAME    = "AndeRemindersWMClear"
+local WM_CYCLE_BUTTON_NAME = "AndeRemindersWMCycle"
 
 -- Target markers (raid target icons) use the same approach: secure buttons that
 -- run "/tm N" on the current target, bound to physical keys.
@@ -29,6 +30,7 @@ local WORLD_ACTIONS        = {
     { key = "square",   label = "Square",           index = 1, icon = 6 },
     { key = "cross",    label = "Cross",            index = 4, icon = 7 },
     { key = "skull",    label = "Skull",            index = 8, icon = 8 },
+    { key = "cycle",    label = "Cycle World Marker" },
     { key = "clearAll", label = "Clear All Markers" },
 }
 
@@ -54,15 +56,19 @@ end
 TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "cycle", label = "Cycle Target Marker" }
 
 local GROUPS = {
-    world  = { dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX, clearName = CLEAR_BUTTON_NAME },
-    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX, clearName = TM_CYCLE_BUTTON_NAME },
+    world  = { dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX,
+               clearName = CLEAR_BUTTON_NAME, cycleName = WM_CYCLE_BUTTON_NAME },
+    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX,
+               cycleName = TM_CYCLE_BUTTON_NAME },
 }
 local GROUP_ORDER = { GROUPS.world, GROUPS.target }
 
 for _, group in ipairs(GROUP_ORDER) do
     for _, action in ipairs(group.actions) do
-        if action.key == "clearAll" or action.key == "cycle" then
+        if action.key == "clearAll" then
             action.bindingTarget = "CLICK " .. group.clearName .. ":LeftButton"
+        elseif action.key == "cycle" then
+            action.bindingTarget = "CLICK " .. group.cycleName .. ":LeftButton"
         else
             action.bindingTarget = "CLICK " .. group.buttonPrefix .. action.index .. ":LeftButton"
         end
@@ -71,6 +77,7 @@ end
 
 local markerButtons = {}
 local clearButton
+local markerCycleButton
 local targetButtons = {}
 local targetCycleButton
 
@@ -85,6 +92,13 @@ local function MarkerMacro(index, useCursor)
     return SLASH_CLEAR_WORLD_MARKER1 .. " " .. index .. "\n" .. SLASH_WORLD_MARKER1 .. " " .. index
 end
 
+-- The cycle button walks the markers in raid-icon order (Star, Circle, ... Skull), which is
+-- the order they are listed in WORLD_ACTIONS; each position maps to its /wm index.
+local CYCLE_ORDER = {}
+for _, action in ipairs(WORLD_ACTIONS) do
+    if action.index then CYCLE_ORDER[#CYCLE_ORDER + 1] = action.index end
+end
+
 local pendingModeApply = false
 
 local function ApplyMarkerMode(useCursor)
@@ -95,6 +109,9 @@ local function ApplyMarkerMode(useCursor)
     end
     for i = 1, 8 do
         markerButtons[i]:SetAttribute("macrotext", MarkerMacro(i, useCursor))
+    end
+    for pos, index in ipairs(CYCLE_ORDER) do
+        markerCycleButton:SetAttribute("cycleMacro" .. pos, MarkerMacro(index, useCursor))
     end
     pendingModeApply = false
     return true
@@ -112,6 +129,21 @@ local function EnsureButtons(useCursor)
     clearButton:SetAttribute("type", "macro")
     clearButton:SetAttribute("macrotext", SLASH_CLEAR_WORLD_MARKER1 .. " all")
     clearButton:RegisterForClicks("AnyUp", "AnyDown")
+
+    -- Each press places the next marker (wrapping). Like the target marker cycle, the
+    -- secure pre-click snippet swaps the macro text on the down click so it also works in
+    -- combat; the key-up click then runs the text the down click chose.
+    markerCycleButton = CreateFrame("Button", WM_CYCLE_BUTTON_NAME, nil,
+        "SecureActionButtonTemplate,SecureHandlerBaseTemplate")
+    markerCycleButton:SetAttribute("type", "macro")
+    markerCycleButton:RegisterForClicks("AnyUp", "AnyDown")
+    SecureHandlerWrapScript(markerCycleButton, "OnClick", markerCycleButton, [[
+        if down then
+            local i = ((self:GetAttribute("cycleIndex") or 0) % 8) + 1
+            self:SetAttribute("cycleIndex", i)
+            self:SetAttribute("macrotext", self:GetAttribute("cycleMacro" .. i))
+        end
+    ]])
 
     ApplyMarkerMode(useCursor)
 end
@@ -371,10 +403,13 @@ local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
     y = y - 14
 
     local stripe = 0
+    local previous
     for _, action in ipairs(group.actions) do
-        if action.key == "clearAll" or action.key == "cycle" then
+        -- Gap between the per-marker rows and the utility rows (cycle / clear all).
+        if not action.index and previous and previous.index then
             y = y - 10
         end
+        previous = action
 
         stripe = stripe + 1
         AR.UI.RowStripe(parent, y + 4, ROW_HEIGHT, stripe, COL_NAME_X - 4)
