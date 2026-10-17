@@ -139,7 +139,7 @@ function AR:CreateMinimapButton()
     local dataObject = LDB:GetDataObjectByName(LDB_NAME) or LDB:NewDataObject(LDB_NAME, {
         type = "launcher",
         text = "AndeReminders",
-        icon = "Interface\\Icons\\INV_Misc_Note_01",
+        icon = "Interface\\AddOns\\AndeReminders\\Media\\minimap-icon.tga",
         OnClick = function() AR:ToggleSettings() end,
         OnTooltipShow = function(tooltip)
             tooltip:AddLine("AndeReminders")
