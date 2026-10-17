@@ -384,6 +384,7 @@ local function PrintHelp()
     print("  /ar            toggle the settings window")
     print("  /ar anchors    show / hide the draggable anchor frames")
     print("  /ar reset      put every anchor back at its default position")
+    print("  /ar unsnooze   show snoozed alerts again")
 end
 
 SLASH_ANDEREMINDERS1 = "/ar"
@@ -397,6 +398,9 @@ SlashCmdList["ANDEREMINDERS"] = function(msg)
     elseif cmd == "reset" then
         AR:ResetAnchors()
         AR.Util.Print("anchors reset to their default positions.")
+    elseif cmd == "unsnooze" then
+        AR.UI.UnsnoozeAlerts()
+        AR.Util.Print("snoozed alerts will show again at the next check.")
     else
         PrintHelp()
     end

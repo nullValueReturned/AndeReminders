@@ -8,6 +8,7 @@ A lightweight World of Warcraft addon (Midnight, patch 12.1.5) that nudges you a
 - Flashes your active talent loadout name + icon on screen when a ready check fires.
 - Uses [TalentLoadoutEx](https://www.curseforge.com/wow/addons/talent-loadout-ex) names and icons if installed; otherwise falls back to the native saved loadout name (or "Starter Build" while that is active).
 - Configurable font, size, and color. Shows `unknown talent loadout` if none is detected.
+- **Expected loadout by content**: on the Talents tab, switch to the loadout you want, pick the content (any raid, a raid difficulty, Mythic+, a dungeon difficulty, Delves, or the instance you are standing in) and click **Add rule**. On a ready check you get a red "Wrong talent loadout! Switch to: ..." warning if the active loadout differs. Rules are per spec, the most specific one wins, and the tab shows your active loadout, where you are, and whether the rule for here matches.
 
 ### Gear
 On login, zone change, and equip, checks for:
@@ -21,8 +22,9 @@ Notifications can be on-screen, in chat, or both. Equipment changed mid-fight is
 ### Repair
 Continuous durability monitor. A large on-screen banner appears the moment any slot drops below a configurable durability threshold (default 50%, out of combat), including right after login if you log in damaged.
 
-### Enchants
+### Enchants & Gems
 - Checks every enchantable slot for missing enchants on login/zone/equip.
+- Optionally warns about empty gem sockets on any equipped item.
 - Per-slot or global item-level floor so you don't get nagged about leveling greens.
 - On-screen alert and/or chat output.
 
@@ -51,6 +53,12 @@ Build your own alerts on top of BigWigs or DBM:
 
 Boss-mod text that the game marks as secret (12.x) is never read by the addon; those entries simply fall back to their own name.
 
+## Snooze and ignore
+
+Gear, enchant and gem alerts list each problem on its own row:
+- **Ignore** stops reminding you about that one item. Enchant slots are unticked in the Enchants table, ignored gem slots and gear issues are listed on their tab with a button to turn them back on.
+- **Snooze** hides the alert until something new is wrong or you reload the UI. `/ar unsnooze` brings snoozed alerts back.
+
 ## Anchors
 
 Every notification type has its own draggable anchor frame. Open settings, click **Toggle Anchors**, and drag the colored boxes wherever you want them. Positions are saved per account.
@@ -62,6 +70,7 @@ Every notification type has its own draggable anchor frame. Open settings, click
 | `/ar` | Toggle the settings window (Escape closes it) |
 | `/ar anchors` | Show / hide the anchor frames |
 | `/ar reset` | Put every anchor back at its default position |
+| `/ar unsnooze` | Show snoozed alerts again |
 | `/ar help` | List the commands |
 | `/arbm list` | List BossMods entries and their trigger types |
 | `/arbm trigger` | Fire a 10s test timer to check which entries would match |

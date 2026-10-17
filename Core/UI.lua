@@ -702,14 +702,32 @@ function UI.NotifyRow(parent, x, y, notify)
 end
 
 -- ---------------------------------------------------------------------------
--- Alert box (accent stripe, header, wrapped body, close button), anchored to a named anchor
+-- Alert box (accent stripe, header, wrapped body, optional per-item rows, snooze button),
+-- anchored to a named anchor
 -- ---------------------------------------------------------------------------
+
+local ALERT_ITEM_H = 22
+local alerts = {}  -- every alert, so "/ar unsnooze" can reach them
+
+local function ShowTip(owner, text)
+    GameTooltip:SetOwner(owner, "ANCHOR_TOP")
+    GameTooltip:SetText(text, 1, 1, 1, 1, true)
+    GameTooltip:Show()
+end
 
 -- spec = { name = global frame name, anchor = anchor name, width, fallbackY }
 -- The frame is created on first use and only ever shown/hidden afterwards.
+--
+-- alert:Show(text, items)
+--   items (optional) = array of { text = label, onIgnore = function }. Each gets a row with an
+--   "Ignore" button; onIgnore is responsible for storing the ignore and re-running the check.
+-- Every alert has a "Snooze" button: it hides the alert until its content changes or the UI
+-- reloads. alert:Reset() hides it and forgets the snooze (call when the problem is fixed).
 function UI.CreateAlert(spec)
     local frame
     local alert = {}
+    local rows = {}
+    local snoozedSig, currentSig
 
     local function GetFrame()
         if frame then return frame end
@@ -751,14 +769,72 @@ function UI.CreateAlert(spec)
         closeBtn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -3, -3)
         closeBtn:SetScript("OnClick", function() frame:Hide() end)
 
+        local snooze = UI.Button(frame, "Snooze", 64, 20)
+        snooze:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -10, 8)
+        snooze:SetScript("OnClick", function()
+            snoozedSig = currentSig
+            frame:Hide()
+        end)
+        snooze:SetScript("OnEnter", function(self)
+            ShowTip(self, "Hide this until something changes or you reload the UI.\n/ar unsnooze brings it back.")
+        end)
+        snooze:SetScript("OnLeave", GameTooltip_Hide)
+
         UI.FadeInOnShow(frame, 12)
         return frame
     end
 
-    function alert:Show(text)
+    local function GetRow(i)
+        if rows[i] then return rows[i] end
+        local row = NewFrame("Frame", nil, frame)
+        row:SetHeight(ALERT_ITEM_H)
+
+        local btn = UI.Button(row, "Ignore", 56, 18)
+        btn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
+        btn:SetScript("OnEnter", function(self)
+            ShowTip(self, "Stop reminding me about this. You can turn it back on in the settings.")
+        end)
+        btn:SetScript("OnLeave", GameTooltip_Hide)
+        row.btn = btn
+
+        local label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("LEFT", row, "LEFT", 0, 0)
+        label:SetPoint("RIGHT", btn, "LEFT", -6, 0)
+        label:SetJustifyH("LEFT")
+        label:SetWordWrap(false)
+        row.label = label
+
+        rows[i] = row
+        return row
+    end
+
+    function alert:Show(text, items)
+        items = items or {}
+        local sig = text
+        for _, item in ipairs(items) do sig = sig .. "\n" .. item.text end
+        currentSig = sig
+        if snoozedSig == sig then return end
+        snoozedSig = nil
+
         local f = GetFrame()
         f.body:SetText(text)
-        f:SetHeight(f.body:GetStringHeight() + 46)
+        local bodyH = text ~= "" and (f.body:GetStringHeight() + 4) or 0
+
+        local y = 28 + bodyH
+        for i, item in ipairs(items) do
+            local row = GetRow(i)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT",  f, "TOPLEFT",  14, -y)
+            row:SetPoint("TOPRIGHT", f, "TOPRIGHT", -14, -y)
+            row.label:SetText(item.text)
+            row.btn:SetShown(item.onIgnore ~= nil)
+            row.btn:SetScript("OnClick", function() if item.onIgnore then item.onIgnore() end end)
+            row:Show()
+            y = y + ALERT_ITEM_H
+        end
+        for i = #items + 1, #rows do rows[i]:Hide() end
+
+        f:SetHeight(y + 36)
         f:Show()
     end
 
@@ -766,9 +842,23 @@ function UI.CreateAlert(spec)
         if frame then frame:Hide() end
     end
 
+    function alert:Reset()
+        snoozedSig, currentSig = nil, nil
+        self:Hide()
+    end
+
+    function alert:Unsnooze()
+        snoozedSig = nil
+    end
+
     function alert:IsShown()
         return frame ~= nil and frame:IsShown()
     end
 
+    alerts[#alerts + 1] = alert
     return alert
+end
+
+function UI.UnsnoozeAlerts()
+    for _, a in ipairs(alerts) do a:Unsnooze() end
 end

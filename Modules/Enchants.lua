@@ -13,6 +13,18 @@ local ENCHANTABLE_SLOTS = {
     { id = 17, name = "Off Hand"  },
 }
 
+-- Every slot that can carry gem sockets, in report order.
+local GEM_SLOTS = {
+    { id = 1,  name = "Head"      }, { id = 2,  name = "Neck"      }, { id = 3,  name = "Shoulder"  },
+    { id = 5,  name = "Chest"     }, { id = 6,  name = "Waist"     }, { id = 7,  name = "Legs"      },
+    { id = 8,  name = "Feet"      }, { id = 9,  name = "Wrist"     }, { id = 10, name = "Hands"     },
+    { id = 11, name = "Finger 1"  }, { id = 12, name = "Finger 2"  }, { id = 13, name = "Trinket 1" },
+    { id = 14, name = "Trinket 2" }, { id = 15, name = "Back"      }, { id = 16, name = "Main Hand" },
+    { id = 17, name = "Off Hand"  },
+}
+local GEM_SLOT_NAME = {}
+for _, slot in ipairs(GEM_SLOTS) do GEM_SLOT_NAME[slot.id] = slot.name end
+
 local OFF_HAND    = 17
 local ARMOR_CLASS = 4  -- shields and held-in-off-hand items cannot be enchanted
 
@@ -37,6 +49,8 @@ function EnchantModule:InitDB(db)
     if not db.enchants.globalIlvl then
         db.enchants.globalIlvl = { enabled = true, value = 250 }
     end
+    if db.enchants.gems == nil then db.enchants.gems = true end
+    if not db.enchants.gemIgnored then db.enchants.gemIgnored = {} end
     if not db.enchants.slots then db.enchants.slots = {} end
     for _, slot in ipairs(ENCHANTABLE_SLOTS) do
         if not db.enchants.slots[slot.id] then
@@ -45,8 +59,8 @@ function EnchantModule:InitDB(db)
     end
 end
 
-function EnchantModule:ShowAlert(text)
-    enchantAlert:Show(text)
+function EnchantModule:ShowAlert(text, items)
+    enchantAlert:Show(text, items)
 end
 
 -- ---------------------------------------------------------------------------
@@ -89,7 +103,34 @@ function EnchantModule:CheckAll(db)
     return missing
 end
 
-function EnchantModule:RunCheck()
+-- Number of empty gem sockets on an item link. The item stats table only lists the sockets
+-- that are still empty, so a fully gemmed item reports none.
+local function CountEmptySockets(link)
+    local stats = C_Item.GetItemStats(link)
+    if not stats then return 0 end
+    local n = 0
+    for key, count in pairs(stats) do
+        if type(key) == "string" and key:find("^EMPTY_SOCKET_") then n = n + count end
+    end
+    return n
+end
+
+-- Slot ids (in report order) holding an item with at least one empty socket.
+function EnchantModule:CheckGems(db)
+    local empty = {}
+    for _, slot in ipairs(GEM_SLOTS) do
+        if not db.enchants.gemIgnored[slot.id] then
+            local link = GetInventoryItemLink("player", slot.id)
+            if link and CountEmptySockets(link) > 0 then
+                table.insert(empty, slot.id)
+            end
+        end
+    end
+    return empty
+end
+
+-- silent: skip the chat line (used when re-checking right after an Ignore click).
+function EnchantModule:RunCheck(silent)
     if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
     if not AR.db then return end
     if InCombatLockdown() then
@@ -97,20 +138,52 @@ function EnchantModule:RunCheck()
         return
     end
     needsRecheck = false
-    local missing = self:CheckAll(AR.db)
-    if #missing == 0 then
-        enchantAlert:Hide()
+    local db = AR.db
+    local missing = self:CheckAll(db)
+    local gems    = db.enchants.gems and self:CheckGems(db) or {}
+    if #missing == 0 and #gems == 0 then
+        enchantAlert:Reset()
         return
     end
 
-    local notify = AR.db.enchants.notify
-    local slots  = table.concat(missing, ", ")
+    local notify = db.enchants.notify
 
-    if notify.chat then
-        Util.Print("Missing enchant: " .. slots)
+    if notify.chat and not silent then
+        if #missing > 0 then Util.Print("Missing enchant: " .. table.concat(missing, ", ")) end
+        if #gems > 0 then
+            local names = {}
+            for _, id in ipairs(gems) do table.insert(names, GEM_SLOT_NAME[id]) end
+            Util.Print("Empty gem socket: " .. table.concat(names, ", "))
+        end
     end
+
     if notify.screen then
-        self:ShowAlert("|cFFFFCC00Missing enchant:|r\n" .. slots)
+        local items = {}
+        -- Ignoring an enchant slot unticks it in the settings table; a gem slot goes on the
+        -- ignore list shown next to the gem checkbox.
+        for _, slot in ipairs(ENCHANTABLE_SLOTS) do
+            for _, name in ipairs(missing) do
+                if name == slot.name then
+                    table.insert(items, {
+                        text = "|cFFFFCC00" .. slot.name .. "|r  missing enchant",
+                        onIgnore = function()
+                            db.enchants.slots[slot.id].enabled = false
+                            self:RunCheck(true)
+                        end,
+                    })
+                end
+            end
+        end
+        for _, id in ipairs(gems) do
+            table.insert(items, {
+                text = "|cFFFFCC00" .. GEM_SLOT_NAME[id] .. "|r  empty gem socket",
+                onIgnore = function()
+                    db.enchants.gemIgnored[id] = true
+                    self:RunCheck(true)
+                end,
+            })
+        end
+        self:ShowAlert("", items)
     end
 end
 
@@ -151,12 +224,36 @@ function EnchantModule:BuildUI(parent, db)
     local COL_LABEL_X = 236
     local ROW_HEIGHT  = 30
 
-    AR.UI.Title(parent, "Enchant Reminders", COL_NAME_X, -16)
+    AR.UI.Title(parent, "Enchant & Gem Reminders", COL_NAME_X, -16)
 
     AR.UI.NotifyRow(parent, COL_NAME_X, -48, db.enchants.notify)
 
+    -- Gem sockets (the per-slot table below only covers enchants).
+    local cbGems = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+    cbGems:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X - 2, -78)
+    cbGems:SetChecked(db.enchants.gems)
+    cbGems:SetScript("OnClick", function(self)
+        db.enchants.gems = self:GetChecked()
+        EnchantModule:RunCheck(true)
+    end)
+
+    local cbGemsLabel = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    cbGemsLabel:SetPoint("LEFT", cbGems, "RIGHT", 6, 0)
+    cbGemsLabel:SetText("Also warn about empty gem sockets")
+
+    local gemIgnoredText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    gemIgnoredText:SetPoint("LEFT", cbGemsLabel, "RIGHT", 16, 0)
+
+    local gemClear = AR.UI.Button(parent, "Clear ignored", 96, 20)
+    gemClear:SetPoint("LEFT", gemIgnoredText, "RIGHT", 10, 0)
+    gemClear:SetScript("OnClick", function()
+        wipe(db.enchants.gemIgnored)
+        parent:GetScript("OnShow")()
+        EnchantModule:RunCheck(true)
+    end)
+
     local hThreshold = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    hThreshold:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -84)
+    hThreshold:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, -120)
     hThreshold:SetText("ITEM LEVEL")
 
     local cbGlobalIlvl = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
@@ -183,9 +280,9 @@ function EnchantModule:BuildUI(parent, db)
     globalIlvlInput:SetScript("OnEnterPressed", function(self) SaveGlobalIlvl(self) self:ClearFocus() end)
     globalIlvlInput:SetScript("OnEditFocusLost", SaveGlobalIlvl)
 
-    AR.UI.Divider(parent, -116, COL_NAME_X - 4)
+    AR.UI.Divider(parent, -152, COL_NAME_X - 4)
 
-    local HEADER_TOP = -128
+    local HEADER_TOP = -164
 
     local hSlot = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     hSlot:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_NAME_X, HEADER_TOP)
@@ -201,6 +298,7 @@ function EnchantModule:BuildUI(parent, db)
 
     local SLOTS_TOP = HEADER_TOP - 22
     local slotEditBoxes = {}
+    local slotChecks    = {}
 
     for i, slot in ipairs(ENCHANTABLE_SLOTS) do
         local slotData = db.enchants.slots[slot.id]
@@ -216,6 +314,7 @@ function EnchantModule:BuildUI(parent, db)
         cb:SetPoint("TOPLEFT", parent, "TOPLEFT", COL_CHECK_X, y + 4)
         cb:SetChecked(slotData.enabled)
         cb:SetScript("OnClick", function(self) slotData.enabled = self:GetChecked() end)
+        slotChecks[slot.id] = cb
 
         local editBox = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
         editBox:SetSize(64, 24)
@@ -252,6 +351,20 @@ function EnchantModule:BuildUI(parent, db)
     end)
 
     UpdateGlobalIlvlState()
+
+    -- Slots can be switched off from the alert's Ignore button while this tab is already built.
+    parent:SetScript("OnShow", function()
+        for _, slot in ipairs(ENCHANTABLE_SLOTS) do
+            slotChecks[slot.id]:SetChecked(db.enchants.slots[slot.id].enabled)
+        end
+        local names = {}
+        for _, gslot in ipairs(GEM_SLOTS) do
+            if db.enchants.gemIgnored[gslot.id] then table.insert(names, gslot.name) end
+        end
+        gemIgnoredText:SetText(#names > 0 and ("Ignored: " .. table.concat(names, ", ")) or "")
+        gemClear:SetShown(#names > 0)
+    end)
+    parent:GetScript("OnShow")()
 end
 
-AR:RegisterModule("Enchants", EnchantModule)
+AR:RegisterModule("Enchants & Gems", EnchantModule)

@@ -93,6 +93,7 @@ function GearModule:InitDB(db)
     if not db.gear.notify then db.gear.notify = {} end
     if db.gear.notify.chat   == nil then db.gear.notify.chat   = true end
     if db.gear.notify.screen == nil then db.gear.notify.screen = true end
+    if not db.gear.ignored then db.gear.ignored = {} end  -- [issue key] = true, set from the alert
     if not db.gear.checks then db.gear.checks = {} end
     if db.gear.checks.weaponType    == nil then db.gear.checks.weaponType    = true end
     if db.gear.checks.weaponStat    == nil then db.gear.checks.weaponStat    = true end
@@ -103,8 +104,8 @@ function GearModule:InitDB(db)
     if db.gear.durabilityThreshold == nil then db.gear.durabilityThreshold = DEFAULT_DURABILITY_PERCENT end
 end
 
-function GearModule:ShowAlert(text)
-    gearAlert:Show(text)
+function GearModule:ShowAlert(text, items)
+    gearAlert:Show(text, items)
 end
 
 -- ---------------------------------------------------------------------------
@@ -169,7 +170,10 @@ function GearModule:CheckLowItemLevel(threshold)
     for _, slot in ipairs(SLOT_ORDER) do
         local ilvl = Util.GetEquippedItemLevel(slot)
         if ilvl and ilvl > 0 and ilvl < threshold then
-            table.insert(issues, SLOT_NAMES[slot] .. ": item level " .. ilvl .. " (below " .. threshold .. ")")
+            table.insert(issues, {
+                key  = "lowIlvl:" .. slot,
+                text = SLOT_NAMES[slot] .. ": item level " .. ilvl .. " (below " .. threshold .. ")",
+            })
         end
     end
     return issues
@@ -268,7 +272,8 @@ function GearModule:RunDurabilityCheck()
     end
 end
 
-function GearModule:RunCheck()
+-- silent: skip the chat lines (used when re-checking right after an Ignore click).
+function GearModule:RunCheck(silent)
     if UnitLevel("player") < GetMaxLevelForPlayerExpansion() then return end
     if not AR.db or not AR.db.gear then return end
     if InCombatLockdown() then
@@ -282,40 +287,54 @@ function GearModule:RunCheck()
     if not specId then return end
     local specData = SPEC_DATA[specId]
 
+    -- Each issue is { key, text }; the key is what "Ignore" stores. Weapon issues are per spec.
     local issues = {}
+    local function Add(key, text)
+        if not db.gear.ignored[key] then table.insert(issues, { key = key, text = text }) end
+    end
 
     if db.gear.checks.weaponType and specData then
-        for _, v in ipairs(self:CheckWeaponType(specData)) do table.insert(issues, v) end
+        for _, v in ipairs(self:CheckWeaponType(specData)) do Add("weaponType:" .. specId, v) end
     end
 
     if db.gear.checks.weaponStat and specData then
-        for _, v in ipairs(self:CheckWeaponStat(specData)) do table.insert(issues, v) end
+        for _, v in ipairs(self:CheckWeaponStat(specData)) do Add("weaponStat:" .. specId, v) end
     end
 
     if db.gear.checks.lowIlvl then
         for _, v in ipairs(self:CheckLowItemLevel(db.gear.lowIlvlThreshold or 50)) do
-            table.insert(issues, v)
+            Add(v.key, v.text)
         end
     end
 
     if db.gear.checks.cloakGlider then
         local gliderIssue = self:CheckCloakGlider()
-        if gliderIssue then table.insert(issues, gliderIssue) end
+        if gliderIssue then Add("cloakGlider", gliderIssue) end
     end
 
     if #issues == 0 then
-        gearAlert:Hide()
+        gearAlert:Reset()
         return
     end
 
     local notify = db.gear.notify
-    if notify.chat then
+    if notify.chat and not silent then
         for _, issue in ipairs(issues) do
-            Util.Print(issue)
+            Util.Print(issue.text)
         end
     end
     if notify.screen then
-        self:ShowAlert(table.concat(issues, "\n"))
+        local items = {}
+        for _, issue in ipairs(issues) do
+            table.insert(items, {
+                text = issue.text,
+                onIgnore = function()
+                    db.gear.ignored[issue.key] = true
+                    self:RunCheck(true)
+                end,
+            })
+        end
+        self:ShowAlert("", items)
     end
 end
 
@@ -451,6 +470,28 @@ function GearModule:BuildUI(parent, db)
 
     Stripe(DUR_TOP - ROW_H, 2)
     AddCheck(DUR_TOP - ROW_H, "cloakGlider", "Missing Goblin Glider cloak tinker (Engineering)")
+
+    -- Reminders silenced with the alert's Ignore button.
+    AR.UI.Divider(parent, DUR_TOP - ROW_H * 2 - 8, X - 4)
+    local ignoredText = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    ignoredText:SetPoint("TOPLEFT", parent, "TOPLEFT", X, DUR_TOP - ROW_H * 2 - 28)
+
+    local ignoredClear = AR.UI.Button(parent, "Show them again", 130, 22)
+    ignoredClear:SetPoint("LEFT", ignoredText, "RIGHT", 14, 0)
+    ignoredClear:SetScript("OnClick", function()
+        wipe(db.gear.ignored)
+        parent:GetScript("OnShow")()
+        GearModule:RunCheck(true)
+    end)
+
+    parent:SetScript("OnShow", function()
+        local n = 0
+        for _ in pairs(db.gear.ignored) do n = n + 1 end
+        ignoredText:SetText(n == 0 and "No ignored reminders. Use Ignore on an alert to silence one."
+            or (n .. " ignored reminder" .. (n == 1 and "" or "s")))
+        ignoredClear:SetShown(n > 0)
+    end)
+    parent:GetScript("OnShow")()
 end
 
 AR:RegisterModule("Gear", GearModule)
