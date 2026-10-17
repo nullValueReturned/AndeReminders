@@ -14,7 +14,7 @@ local CLEAR_BUTTON_NAME    = "AndeRemindersWMClear"
 -- Target markers (raid target icons) use the same approach: secure buttons that
 -- run "/tm N" on the current target, bound to physical keys.
 local TM_BUTTON_PREFIX     = "AndeRemindersTM"
-local TM_CLEAR_BUTTON_NAME = "AndeRemindersTMClear"
+local TM_CYCLE_BUTTON_NAME = "AndeRemindersTMCycle"
 
 -- World marker indices (/wm N) do NOT follow the same order as raid target
 -- icons (/raid_target N). This mapping was confirmed in-game:
@@ -51,17 +51,17 @@ for i, name in ipairs(TARGET_ICON_NAMES) do
         index = i,
     }
 end
-TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "clearAll", label = "Clear All Target Markers" }
+TARGET_ACTIONS[#TARGET_ACTIONS + 1] = { key = "cycle", label = "Cycle Target Marker" }
 
 local GROUPS = {
     world  = { dbKey = "worldMarkers", actions = WORLD_ACTIONS, buttonPrefix = BUTTON_PREFIX, clearName = CLEAR_BUTTON_NAME },
-    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX, clearName = TM_CLEAR_BUTTON_NAME },
+    target = { dbKey = "targetMarkers", actions = TARGET_ACTIONS, buttonPrefix = TM_BUTTON_PREFIX, clearName = TM_CYCLE_BUTTON_NAME },
 }
 local GROUP_ORDER = { GROUPS.world, GROUPS.target }
 
 for _, group in ipairs(GROUP_ORDER) do
     for _, action in ipairs(group.actions) do
-        if action.key == "clearAll" then
+        if action.key == "clearAll" or action.key == "cycle" then
             action.bindingTarget = "CLICK " .. group.clearName .. ":LeftButton"
         else
             action.bindingTarget = "CLICK " .. group.buttonPrefix .. action.index .. ":LeftButton"
@@ -72,7 +72,7 @@ end
 local markerButtons = {}
 local clearButton
 local targetButtons = {}
-local targetClearButton
+local targetCycleButton
 
 -- ---------------------------------------------------------------------------
 -- Secure buttons
@@ -116,20 +116,6 @@ local function EnsureButtons(useCursor)
     ApplyMarkerMode(useCursor)
 end
 
--- Raid target icons have no "clear all" call, but each icon can only sit on one
--- unit at a time. Assigning every icon to the player in turn steals it from
--- whichever unit held it, then the final clear removes the player's mark.
--- SetRaidTarget is protected, so this has to run through a secure macro button.
-local function BuildClearAllMacro()
-    local slash = SLASH_TARGET_MARKER1 or "/tm"
-    local lines = {}
-    for i = 1, 8 do
-        lines[#lines + 1] = slash .. " [@player] " .. i
-    end
-    lines[#lines + 1] = slash .. " [@player] 0"
-    return table.concat(lines, "\n")
-end
-
 -- Each target marker key marks either the target or the mouseover unit: the
 -- per-key override wins, otherwise the global setting decides.
 local function UsesMouseover(tm, action)
@@ -147,9 +133,11 @@ local function ApplyTargetMode(tm)
     end
     local slash = SLASH_TARGET_MARKER1 or "/tm"
     for _, action in ipairs(TARGET_ACTIONS) do
+        local unit = UsesMouseover(tm, action) and " [@mouseover] " or " "
         if action.index then
-            local unit = UsesMouseover(tm, action) and " [@mouseover] " or " "
             targetButtons[action.index]:SetAttribute("macrotext", slash .. unit .. action.index)
+        else
+            targetCycleButton:SetAttribute("cyclePrefix", slash .. unit)
         end
     end
     pendingTargetApply = false
@@ -157,17 +145,30 @@ local function ApplyTargetMode(tm)
 end
 
 local function EnsureTargetButtons()
-    if targetClearButton then return end
+    if targetCycleButton then return end
     for i = 1, 8 do
         local btn = CreateFrame("Button", TM_BUTTON_PREFIX .. i, nil, "SecureActionButtonTemplate")
         btn:SetAttribute("type", "macro")
         btn:RegisterForClicks("AnyUp", "AnyDown")
         targetButtons[i] = btn
     end
-    targetClearButton = CreateFrame("Button", TM_CLEAR_BUTTON_NAME, nil, "SecureActionButtonTemplate")
-    targetClearButton:SetAttribute("type", "macro")
-    targetClearButton:SetAttribute("macrotext", BuildClearAllMacro())
-    targetClearButton:RegisterForClicks("AnyUp", "AnyDown")
+    -- SetRaidTarget is protected and rapid-fire calls get throttled, so there is no
+    -- reliable "clear all". Instead each press marks the next icon (1-8, wrapping).
+    -- The pre-click snippet runs securely, so it can rewrite the macro even in
+    -- combat. It only advances on the down click: with key-up bindings the up click
+    -- then runs the text set by the matching down click.
+    targetCycleButton = CreateFrame("Button", TM_CYCLE_BUTTON_NAME, nil,
+        "SecureActionButtonTemplate,SecureHandlerBaseTemplate")
+    targetCycleButton:SetAttribute("type", "macro")
+    targetCycleButton:SetAttribute("cyclePrefix", "/tm ")
+    targetCycleButton:RegisterForClicks("AnyUp", "AnyDown")
+    SecureHandlerWrapScript(targetCycleButton, "OnClick", targetCycleButton, [[
+        if down then
+            local i = ((self:GetAttribute("cycleIndex") or 0) % 8) + 1
+            self:SetAttribute("cycleIndex", i)
+            self:SetAttribute("macrotext", self:GetAttribute("cyclePrefix") .. i)
+        end
+    ]])
 end
 
 -- ---------------------------------------------------------------------------
@@ -371,7 +372,7 @@ local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
 
     local stripe = 0
     for _, action in ipairs(group.actions) do
-        if action.key == "clearAll" then
+        if action.key == "clearAll" or action.key == "cycle" then
             y = y - 10
         end
 
@@ -413,7 +414,7 @@ local function BuildKeybindTab(parent, db, group, title, extraWidgets, rowExtra)
             Refresh()
         end)
 
-        if rowExtra and action.index then rowExtra(action, clearBtn) end
+        if rowExtra and (action.index or action.key == "cycle") then rowExtra(action, clearBtn) end
 
         y = y - ROW_HEIGHT
     end
