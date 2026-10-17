@@ -103,16 +103,30 @@ function EnchantModule:CheckAll(db)
     return missing
 end
 
--- Number of empty gem sockets on an item link. The item stats table only lists the sockets
--- that are still empty, so a fully gemmed item reports none.
-local function CountEmptySockets(link)
-    local stats = C_Item.GetItemStats(link)
-    if not stats then return 0 end
-    local n = 0
-    for key, count in pairs(stats) do
-        if type(key) == "string" and key:find("^EMPTY_SOCKET_") then n = n + count end
+-- total sockets, socketed gems for an item link; nil while the item data is not available.
+-- The gem fields are blanked before asking for the item stats: the stats of a gemmed link
+-- depend on the gems being cached, which is not the case right after a reload, so a fully
+-- gemmed item could read as having only empty sockets. The gems actually in the item are read
+-- straight from the link (fields 4-7: itemID:enchant:gem1:gem2:gem3:gem4).
+local function GetSocketInfo(link)
+    local itemString = link:match("item:[^|]*")
+    if not itemString then return nil end
+    local fields = { strsplit(":", itemString) }
+    if #fields < 7 then return nil end
+
+    local filled = 0
+    for i = 4, 7 do
+        if (tonumber(fields[i]) or 0) > 0 then filled = filled + 1 end
+        fields[i] = ""
     end
-    return n
+
+    local stats = C_Item.GetItemStats(table.concat(fields, ":"))
+    if not stats then return nil end
+    local total = 0
+    for key, count in pairs(stats) do
+        if type(key) == "string" and key:find("^EMPTY_SOCKET_") then total = total + count end
+    end
+    return total, filled
 end
 
 -- Slot ids (in report order) holding an item with at least one empty socket.
@@ -121,12 +135,25 @@ function EnchantModule:CheckGems(db)
     for _, slot in ipairs(GEM_SLOTS) do
         if not db.enchants.gemIgnored[slot.id] then
             local link = GetInventoryItemLink("player", slot.id)
-            if link and CountEmptySockets(link) > 0 then
+            local total, filled = nil, nil
+            if link then total, filled = GetSocketInfo(link) end
+            if total and total > filled then
                 table.insert(empty, slot.id)
             end
         end
     end
     return empty
+end
+
+-- /ar gems: what the gem check sees on each slot, for diagnosing wrong results.
+function EnchantModule:DebugGems()
+    for _, slot in ipairs(GEM_SLOTS) do
+        local link = GetInventoryItemLink("player", slot.id)
+        if link then
+            local total, filled = GetSocketInfo(link)
+            Util.Print(slot.name .. ": sockets " .. tostring(total) .. ", gems " .. tostring(filled))
+        end
+    end
 end
 
 -- silent: skip the chat line (used when re-checking right after an Ignore click).

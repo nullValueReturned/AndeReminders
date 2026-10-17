@@ -398,6 +398,10 @@ SlashCmdList["ANDEREMINDERS"] = function(msg)
     elseif cmd == "reset" then
         AR:ResetAnchors()
         AR.Util.Print("anchors reset to their default positions.")
+    elseif cmd == "gems" then
+        for _, entry in ipairs(AR.registeredModules) do
+            if entry.module.DebugGems then entry.module:DebugGems() end
+        end
     elseif cmd == "unsnooze" then
         AR.UI.UnsnoozeAlerts()
         AR.Util.Print("snoozed alerts will show again at the next check.")
