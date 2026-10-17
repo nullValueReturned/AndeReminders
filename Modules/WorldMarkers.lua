@@ -116,32 +116,16 @@ local function EnsureButtons(useCursor)
     ApplyMarkerMode(useCursor)
 end
 
--- Raid target icons have no "clear all" call, so unmark every unit we can reach.
+-- Raid target icons have no "clear all" call, but each icon can only sit on one
+-- unit at a time. Assigning every icon to the player in turn steals it from
+-- whichever unit held it, then the final clear removes the player's mark.
 -- SetRaidTarget isn't protected, so the clear button is a plain (insecure) button
--- and works in combat too. Marks on mobs that are neither targetable by us nor
--- on a visible nameplate can't be reached.
-local function ClearUnit(unit)
-    if UnitExists(unit) and GetRaidTargetIndex(unit) then
-        SetRaidTarget(unit, 0)
-    end
-end
-
+-- and works in combat too.
 local function ClearAllTargetMarkers()
-    for _, unit in ipairs({ "player", "pet", "target", "focus", "mouseover", "targettarget" }) do
-        ClearUnit(unit)
-    end
-    for i = 1, 4 do
-        ClearUnit("party" .. i)
-        ClearUnit("party" .. i .. "target")
-    end
-    for i = 1, 40 do
-        ClearUnit("raid" .. i)
-        ClearUnit("raid" .. i .. "target")
-        ClearUnit("nameplate" .. i)
-    end
     for i = 1, 8 do
-        ClearUnit("boss" .. i)
+        SetRaidTarget("player", i)
     end
+    SetRaidTarget("player", 0)
 end
 
 -- Each target marker key marks either the target or the mouseover unit: the
