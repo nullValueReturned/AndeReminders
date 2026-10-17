@@ -31,6 +31,8 @@ function AR:InitDB()
         AR.db.accent = { r = AR.UI.accent.r, g = AR.UI.accent.g, b = AR.UI.accent.b }
     end
     AR.UI.SetAccent(AR.db.accent.r, AR.db.accent.g, AR.db.accent.b)
+    -- LibDBIcon manages: hide, minimapPos, lock, radius.
+    if not AR.db.minimap then AR.db.minimap = { hide = false } end
     for _, def in ipairs(ANCHOR_DEFS) do
         if not AR.db.anchors[def.name] then
             AR.db.anchors[def.name] = { x = def.x, y = def.y }
@@ -120,6 +122,42 @@ function AR:ResetAnchors()
             f:ClearAllPoints()
             f:SetPoint("CENTER", UIParent, "CENTER", def.x, def.y)
         end
+    end
+end
+
+-- ---------------------------------------------------------------------------
+-- Minimap button
+-- ---------------------------------------------------------------------------
+
+local LDB_NAME = "AndeReminders"
+
+function AR:CreateMinimapButton()
+    local LDB     = LibStub and LibStub("LibDataBroker-1.1", true)
+    local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+    if not LDB or not LDBIcon then return end
+
+    local dataObject = LDB:GetDataObjectByName(LDB_NAME) or LDB:NewDataObject(LDB_NAME, {
+        type = "launcher",
+        text = "AndeReminders",
+        icon = "Interface\\Icons\\INV_Misc_Note_01",
+        OnClick = function() AR:ToggleSettings() end,
+        OnTooltipShow = function(tooltip)
+            tooltip:AddLine("AndeReminders")
+            tooltip:AddLine("|cffff9922Click|r to open the settings window.", 1, 1, 1)
+        end,
+    })
+
+    if not LDBIcon:IsRegistered(LDB_NAME) then
+        LDBIcon:Register(LDB_NAME, dataObject, AR.db.minimap)
+    end
+    LDBIcon:Refresh(LDB_NAME, AR.db.minimap)
+end
+
+function AR:SetMinimapButtonShown(show)
+    AR.db.minimap.hide = not show
+    local LDBIcon = LibStub and LibStub("LibDBIcon-1.0", true)
+    if LDBIcon and LDBIcon:IsRegistered(LDB_NAME) then
+        LDBIcon:Refresh(LDB_NAME, AR.db.minimap)
     end
 end
 
@@ -254,8 +292,17 @@ function AR:CreateSettingsWindow()
     btn:SetScript("OnClick", function() AR:ToggleAnchors() end)
     toggleAnchorsBtn = btn
 
+    local cbMinimap = UI.CreateFrame("CheckButton", nil, side, "UICheckButtonTemplate")
+    cbMinimap:SetSize(24, 24)
+    cbMinimap:SetPoint("BOTTOMLEFT", btn, "TOPLEFT", -4, 10)
+    cbMinimap:SetChecked(not AR.db.minimap.hide)
+    cbMinimap:SetScript("OnClick", function(self) AR:SetMinimapButtonShown(self:GetChecked()) end)
+    local minimapLabel = side:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    minimapLabel:SetPoint("LEFT", cbMinimap, "RIGHT", 4, 0)
+    minimapLabel:SetText("Minimap icon")
+
     local accentLabel = side:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    accentLabel:SetPoint("BOTTOMLEFT", btn, "TOPLEFT", 0, 20)
+    accentLabel:SetPoint("BOTTOMLEFT", cbMinimap, "TOPLEFT", 4, 14)
     accentLabel:SetText("ACCENT")
     local swatch = UI.ColorSwatch(side,
         function() return UI.accent.r, UI.accent.g, UI.accent.b end,
@@ -327,6 +374,7 @@ eventFrame:SetScript("OnEvent", function(self, event, addonName)
     if event == "ADDON_LOADED" and addonName == "AndeReminders" then
         AR:InitDB()
         AR:CreateAnchors()
+        AR:CreateMinimapButton()
         self:UnregisterEvent("ADDON_LOADED")
     end
 end)
