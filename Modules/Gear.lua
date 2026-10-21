@@ -76,7 +76,11 @@ local DEFAULT_DURABILITY_PERCENT = 50
 local ENGINEERING_SKILL_LINE = 202
 local GOBLIN_GLIDER_RECIPE   = 126392
 
+local LOGIN_SETTLE_SECONDS    = 10
+
 local GearModule = {}
+local loginSettled = false  -- tooltip/recipe data is trustworthy a few seconds after login
+C_Timer.After(LOGIN_SETTLE_SECONDS, function() loginSettled = true end)
 local durabilityWarnFrame = nil
 local needsRecheck = false  -- a scheduled check was skipped because the player was in combat
 
@@ -207,10 +211,23 @@ end
 function GearModule:CheckCloakGlider()
     local p1, p2 = GetProfessions()
     if not (IsEngineeringSkillLine(p1) or IsEngineeringSkillLine(p2)) then return nil end
+    -- Recipe data is only populated once a profession window has been opened this session;
+    -- until then GetRecipeInfo is nil / learned=false, so only trust a "not learned" answer
+    -- when the recipe list is actually loaded.
     local recipeInfo = C_TradeSkillUI.GetRecipeInfo(GOBLIN_GLIDER_RECIPE)
-    if not (recipeInfo and recipeInfo.learned) then return nil end
+    local known = (recipeInfo and recipeInfo.learned) or C_SpellBook.IsSpellKnown(GOBLIN_GLIDER_RECIPE)
+    if not known then
+        local recipeIDs = C_TradeSkillUI.GetAllRecipeIDs()
+        if recipeIDs and #recipeIDs > 0 then return nil end
+    end
     if not GetInventoryItemLink("player", BACK) then return nil end
     if CloakHasOnUse() == false then
+        -- Tooltip spell lines and recipe data load lazily after login, so an early "no on-use"
+        -- is unreliable. Hold the warning until the data has had time to settle.
+        if not loginSettled then
+            C_Timer.After(LOGIN_SETTLE_SECONDS + 1, function() GearModule:RunCheck(true) end)
+            return nil
+        end
         return "Missing cloak glider enchant"
     end
     return nil

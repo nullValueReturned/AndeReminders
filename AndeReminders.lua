@@ -153,11 +153,13 @@ function AR:CreateAnchors()
             local dx, dy = 0, 0
             if key == "LEFT" then dx = -1 elseif key == "RIGHT" then dx = 1
             elseif key == "UP" then dy = 1 elseif key == "DOWN" then dy = -1 end
+            -- SetPropagateKeyboardInput is protected during combat lockdown.
+            local canPropagate = not InCombatLockdown()
             if dx == 0 and dy == 0 then
-                self:SetPropagateKeyboardInput(true)  -- not ours: let the game have the key
+                if canPropagate then self:SetPropagateKeyboardInput(true) end  -- not ours: let the game have the key
                 return
             end
-            self:SetPropagateKeyboardInput(false)
+            if canPropagate then self:SetPropagateKeyboardInput(false) end
             local step = IsShiftKeyDown() and 10 or 1
             local cur = AR.db.anchors[def.name]
             AR:SetAnchorPosition(def.name, cur.x + dx * step, cur.y + dy * step)
