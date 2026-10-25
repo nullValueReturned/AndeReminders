@@ -12,6 +12,7 @@ local ANCHOR_DEFS = {
     { name = "enchants",  label = "Enchant Alerts", x = 0, y = 90,  w = 360, h = 80 },
     { name = "gear",      label = "Gear Alerts",    x = 0, y = 0,   w = 380, h = 80 },
     { name = "repair",    label = "Repair Warning", x = 0, y = -90, w = 500, h = 70 },
+    { name = "delves",    label = "Delve Alerts",   x = 0, y = -180, w = 420, h = 70 },
 }
 
 -- Runs fn through the game's error handler so one broken module cannot take the rest of
@@ -592,6 +593,7 @@ local function PrintHelp()
     print("  /ar unsnooze        show snoozed alerts again")
     print("  /ar profile [name]  show or switch this character's profile (reloads the UI)")
     print("  /ar gems            list the socket / gem counts the gem check sees")
+    print("  /ar norole          toggle a fake \"Valeera has no role\" state to test the delve alert")
     print("  /arbm list          list BossMods entries and their trigger types")
     print("  /arbm trigger       fire a 10s test timer to see which entries match")
 end
@@ -617,6 +619,9 @@ SlashCmdList["ANDEREMINDERS"] = function(msg)
         for _, entry in ipairs(AR.registeredModules) do
             if entry.module.DebugGems then entry.module:DebugGems() end
         end
+    elseif cmd == "norole" then
+        local delves = AR.modules["Delves"]
+        if delves then delves:DebugNoRole() end
     elseif cmd == "unsnooze" then
         AR.UI.UnsnoozeAlerts()
         AR.Util.Print("snoozed alerts will show again at the next check.")
