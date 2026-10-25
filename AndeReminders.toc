@@ -3,7 +3,8 @@
 ## Notes: Pre-pull reminders for talents, enchants, gems, gear and repairs, plus quality-of-life tools and a custom BigWigs / DBM alert builder.
 ## Category: Interface Enhancements
 ## Author: Andreas Hartmann
-## Version: 1.0
+## Version: @project-version@
+## X-Curse-Project-ID: 1516171
 ## SavedVariables: AndeRemindersDB
 
 Libs\LibStub\LibStub.lua
